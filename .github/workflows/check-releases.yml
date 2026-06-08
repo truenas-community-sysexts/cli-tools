@@ -1,0 +1,107 @@
+name: Check for New Releases
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+# Serialize manual dispatches against the scheduled run so two concurrent
+# invocations cannot race on the commit/push of tracked-versions.json.
+concurrency:
+  group: check-releases
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # PAT (admin actor) is required to push tracked-versions.json back
+          # to main. The default GITHUB_TOKEN runs as github-actions[bot],
+          # which the default-branch ruleset does not bypass.
+          token: ${{ secrets.CHECK_BUILDS }}
+
+      # -----------------------------------------------------------------------
+      # For every github-sourced tool, query the latest non-prerelease tag and
+      # compare against the tracked version. apt-sourced tools are intentionally
+      # not polled here: they float with the pinned Debian suite and are picked
+      # up fresh on every rebuild. url-sourced tools (no release API) are bumped
+      # manually.
+      # -----------------------------------------------------------------------
+      - name: Check upstream tool releases
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          CHANGED=0
+
+          # Emit "name<TAB>repo<TAB>current_version" for each github tool.
+          while IFS=$'\t' read -r name repo current; do
+            echo "=== ${name} (${repo}) tracked ${current} ==="
+            if ! REL=$(curl -fsSL \
+                  -H "Authorization: Bearer ${GH_TOKEN}" \
+                  "https://api.github.com/repos/${repo}/releases/latest"); then
+              echo "::warning title=check::failed to query ${repo} latest release, skipping"
+              continue
+            fi
+            LATEST=$(printf '%s' "$REL" | jq -r '.tag_name // empty')
+            if [ -z "$LATEST" ]; then
+              echo "::warning title=check::no tag_name for ${repo}, skipping"
+              continue
+            fi
+            echo "  latest upstream: ${LATEST}"
+            if [ "$LATEST" != "$current" ]; then
+              echo "  -> bumping ${name}: ${current} -> ${LATEST}"
+              tmp=$(mktemp)
+              jq --arg name "$name" --arg latest "$LATEST" \
+                 '.tools[$name].version = $latest' \
+                 .github/tracked-versions.json > "$tmp"
+              mv "$tmp" .github/tracked-versions.json
+              CHANGED=1
+            fi
+          done < <(jq -r '.tools | to_entries[]
+                          | select(.value.source=="github")
+                          | [.key, .value.repo, .value.version] | @tsv' \
+                          .github/tracked-versions.json)
+
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push tracked-versions
+        id: write
+        if: steps.check.outputs.changed == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/tracked-versions.json
+          git commit -m "Update tracked tool versions" || {
+            echo "ERROR: nothing to commit (unexpected)"; exit 1; }
+          # Retry once on push failure: if main moved (e.g. a Dependabot merge)
+          # between checkout and now, rebase on top and try again.
+          if ! git push; then
+            echo "Push failed, attempting rebase and retry..."
+            git pull --rebase || {
+              echo "::error title=push::git pull --rebase failed after push rejection"; exit 1; }
+            git push || {
+              echo "::error title=push::git push failed after rebase retry"; exit 1; }
+          fi
+
+      - name: Trigger build
+        if: steps.check.outputs.changed == '1'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml',
+              ref: 'main',
+              inputs: { mark_latest: 'false' }
+            });
+            console.log('Dispatched build.yml (mark_latest=false) after tool version bump');

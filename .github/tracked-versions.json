@@ -1,0 +1,59 @@
+{
+  "debian": {
+    "suite": "bookworm"
+  },
+  "tools": {
+    "btop": {
+      "source": "github",
+      "repo": "aristocratos/btop",
+      "version": "v1.4.4",
+      "asset": "btop-x86_64-linux-musl.tbz",
+      "extract": "btop/bin/btop",
+      "bin": "btop"
+    },
+    "ncdu": {
+      "source": "url",
+      "version": "2.6",
+      "url": "https://dev.yorhel.nl/download/ncdu-2.6-linux-x86_64.tar.gz",
+      "extract": "ncdu",
+      "bin": "ncdu"
+    },
+    "yq": {
+      "source": "github",
+      "repo": "mikefarah/yq",
+      "version": "v4.45.4",
+      "asset": "yq_linux_amd64",
+      "bin": "yq"
+    },
+    "iotop": {
+      "source": "apt",
+      "package": "iotop-c",
+      "bin": "iotop"
+    },
+    "iftop": {
+      "source": "apt",
+      "package": "iftop",
+      "bin": "iftop"
+    },
+    "nethogs": {
+      "source": "apt",
+      "package": "nethogs",
+      "bin": "nethogs"
+    },
+    "tree": {
+      "source": "apt",
+      "package": "tree",
+      "bin": "tree"
+    },
+    "mtr": {
+      "source": "apt",
+      "package": "mtr-tiny",
+      "bin": "mtr"
+    },
+    "nmap": {
+      "source": "apt",
+      "package": "nmap",
+      "bin": "nmap"
+    }
+  }
+}

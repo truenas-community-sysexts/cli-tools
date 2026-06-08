@@ -1,0 +1,418 @@
+name: Build cli-tools Sysext
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Debian suite to build apt tools against (blank = tracked)'
+        required: false
+        default: ''
+      mark_latest:
+        description: 'Mark this release as Latest on GitHub'
+        required: false
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'true'
+
+  workflow_call:
+    inputs:
+      suite:
+        type: string
+        required: false
+        default: ''
+      mark_latest:
+        type: string
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+env:
+  SYSEXT_ROOT: /tmp/cli-tools-sysext
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      suite: ${{ steps.params.outputs.suite }}
+      mark_latest: ${{ steps.params.outputs.mark_latest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/tracked-versions.json
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve build parameters
+        id: params
+        env:
+          INPUT_SUITE: ${{ inputs.suite }}
+          INPUT_MARK_LATEST: ${{ inputs.mark_latest }}
+        run: |
+          TRACKED_SUITE=$(jq -r '.debian.suite' .github/tracked-versions.json)
+          SUITE="${INPUT_SUITE:-$TRACKED_SUITE}"
+          MARK_LATEST="${INPUT_MARK_LATEST:-true}"
+          {
+            echo "suite=${SUITE}"
+            echo "mark_latest=${MARK_LATEST}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: suite=${SUITE} mark_latest=${MARK_LATEST}"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Build the apt-sourced tools against the pinned Debian base so their
+    # glibc is <= TrueNAS's (older glibc binaries run on newer glibc).
+    container: debian:${{ needs.resolve.outputs.suite }}-slim
+    outputs:
+      run_number: ${{ steps.build_id.outputs.run_number }}
+      build_date: ${{ steps.build_id.outputs.build_date }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl tar xz-utils bzip2 gzip unzip \
+            squashfs-tools zstd patchelf jq coreutils git
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Compute build identifier
+        id: build_id
+        run: |
+          echo "run_number=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y.%m.%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Initialize sysext tree
+        run: |
+          rm -rf "${SYSEXT_ROOT}"
+          mkdir -p "${SYSEXT_ROOT}/usr/bin"
+          mkdir -p "${SYSEXT_ROOT}/usr/lib/cli-tools"
+          mkdir -p "${SYSEXT_ROOT}/usr/lib/extension-release.d"
+          # extension-release: ID=_any makes the sysext load on any distro ID,
+          # which is what TrueNAS SCALE needs (its os-release ID is not 'debian').
+          echo "ID=_any" > "${SYSEXT_ROOT}/usr/lib/extension-release.d/extension-release.cli-tools"
+          # Manifest of command names, consumed by install.sh --check.
+          : > "${SYSEXT_ROOT}/usr/lib/cli-tools/manifest.txt"
+          # Human-readable record of what each tool resolved to.
+          : > "${SYSEXT_ROOT}/usr/lib/cli-tools/versions.txt"
+
+      - name: Fetch prebuilt (github/url) tools
+        run: |
+          TVERS=.github/tracked-versions.json
+
+          extract_archive() {
+            # extract_archive <archive> <dest_dir>
+            local a="$1" d="$2"
+            mkdir -p "$d"
+            case "$a" in
+              *.tbz|*.tar.bz2) tar -xjf "$a" -C "$d" ;;
+              *.tar.gz|*.tgz)  tar -xzf "$a" -C "$d" ;;
+              *.tar.xz|*.txz)  tar -xJf "$a" -C "$d" ;;
+              *.zip)           unzip -q "$a" -d "$d" ;;
+              *) echo "::error title=fetch::don't know how to extract ${a}" >&2; return 1 ;;
+            esac
+          }
+
+          # name  source  version  repo  asset  url  extract  bin
+          jq -r '.tools | to_entries[]
+                 | select(.value.source=="github" or .value.source=="url")
+                 | [.key, .value.source, .value.version, (.value.repo//""),
+                    (.value.asset//""), (.value.url//""), (.value.extract//""),
+                    .value.bin] | @tsv' "$TVERS" \
+          | while IFS=$'\t' read -r name source version repo asset url extract bin; do
+              echo "=== ${name} (${source} ${version}) ==="
+              work=$(mktemp -d)
+              if [ "$source" = "github" ]; then
+                dl="https://github.com/${repo}/releases/download/${version}/${asset}"
+                fname="$asset"
+              else
+                dl="$url"
+                fname="$(basename "$url")"
+              fi
+              echo "  fetching ${dl}"
+              curl -fSL --retry 3 --max-time 300 "$dl" -o "${work}/${fname}"
+
+              if [ -z "$extract" ]; then
+                # The downloaded file IS the binary.
+                install -m 0755 "${work}/${fname}" "${SYSEXT_ROOT}/usr/bin/${bin}"
+              else
+                extract_archive "${work}/${fname}" "${work}/x"
+                if [ ! -f "${work}/x/${extract}" ]; then
+                  echo "::error title=fetch::${name}: '${extract}' not found in ${fname}" >&2
+                  find "${work}/x" -maxdepth 3 -type f >&2 || true
+                  exit 1
+                fi
+                install -m 0755 "${work}/x/${extract}" "${SYSEXT_ROOT}/usr/bin/${bin}"
+              fi
+              echo "${bin}" >> "${SYSEXT_ROOT}/usr/lib/cli-tools/manifest.txt"
+              printf '%-12s %s (%s)\n' "$name" "$version" "$source" \
+                >> "${SYSEXT_ROOT}/usr/lib/cli-tools/versions.txt"
+              rm -rf "$work"
+            done
+
+      - name: Install + bundle apt tools
+        run: |
+          TVERS=.github/tracked-versions.json
+          mapfile -t PKGS < <(jq -r '.tools | to_entries[]
+                              | select(.value.source=="apt") | .value.package' "$TVERS")
+          if [ "${#PKGS[@]}" -gt 0 ]; then
+            echo "Installing apt packages: ${PKGS[*]}"
+            apt-get install -y --no-install-recommends "${PKGS[@]}"
+          fi
+
+          # Bundle each apt package (binaries + private lib closure + data).
+          jq -r '.tools | to_entries[]
+                 | select(.value.source=="apt")
+                 | [.key, .value.package] | @tsv' "$TVERS" \
+          | while IFS=$'\t' read -r name package; do
+              .github/scripts/bundle-apt-tool.sh \
+                "${SYSEXT_ROOT}" "${package}" \
+                "${SYSEXT_ROOT}/usr/lib/cli-tools/manifest.txt"
+              ver=$(dpkg-query -W -f='${Version}' "$package" 2>/dev/null || echo '?')
+              printf '%-12s %s (apt:%s)\n' "$name" "$ver" "$package" \
+                >> "${SYSEXT_ROOT}/usr/lib/cli-tools/versions.txt"
+            done
+
+      - name: Finalize sysext tree
+        run: |
+          # Bundle the PREINIT script so install.sh can extract it from the .raw.
+          install -m 0755 scripts/cli-tools-preinit.sh \
+            "${SYSEXT_ROOT}/usr/lib/cli-tools/cli-tools-preinit.sh"
+
+          # De-duplicate and sort the manifest (apt packages can ship helper
+          # binaries like mtr-packet that land alongside the headline tool).
+          sort -u -o "${SYSEXT_ROOT}/usr/lib/cli-tools/manifest.txt" \
+                     "${SYSEXT_ROOT}/usr/lib/cli-tools/manifest.txt"
+
+          echo "=== Manifest (commands) ==="
+          cat "${SYSEXT_ROOT}/usr/lib/cli-tools/manifest.txt"
+          echo "=== Versions ==="
+          sort "${SYSEXT_ROOT}/usr/lib/cli-tools/versions.txt"
+          echo "=== Tree ==="
+          find "${SYSEXT_ROOT}" -type f -o -type l | sort
+
+      - name: Create cli-tools.raw squashfs
+        run: |
+          # -all-root: the runner assembles the tree as the container user, but
+          # the sysext is merged as root on the target. Own files as root.
+          mksquashfs "${SYSEXT_ROOT}" cli-tools.raw -noappend -comp zstd -all-root
+          echo "=== cli-tools.raw ==="
+          ls -lh cli-tools.raw
+          unsquashfs -l cli-tools.raw | head -60
+
+      - name: Smoke-test cli-tools.raw contents
+        run: |
+          SMOKE=$(mktemp -d)
+          trap 'rm -rf "$SMOKE"' EXIT
+          unsquashfs -d "${SMOKE}/x" cli-tools.raw
+
+          fail=0
+          # extension-release sanity
+          EXT="${SMOKE}/x/usr/lib/extension-release.d/extension-release.cli-tools"
+          if [ ! -f "$EXT" ] || ! grep -qx 'ID=_any' "$EXT"; then
+            echo "::error title=smoke::extension-release.cli-tools missing or not ID=_any" >&2
+            fail=1
+          fi
+          # PREINIT bundled
+          if [ ! -x "${SMOKE}/x/usr/lib/cli-tools/cli-tools-preinit.sh" ]; then
+            echo "::error title=smoke::cli-tools-preinit.sh missing from sysext" >&2
+            fail=1
+          fi
+          # Every manifest command must exist as an executable under usr/bin or usr/sbin.
+          while IFS= read -r cmd; do
+            [ -z "$cmd" ] && continue
+            if [ -x "${SMOKE}/x/usr/bin/${cmd}" ] || [ -x "${SMOKE}/x/usr/sbin/${cmd}" ]; then
+              echo "  ok: ${cmd}"
+            else
+              echo "::error title=smoke::manifest lists '${cmd}' but no executable under usr/bin or usr/sbin" >&2
+              fail=1
+            fi
+          done < "${SMOKE}/x/usr/lib/cli-tools/manifest.txt"
+
+          # Best-effort: each headline binary should at least run --version
+          # in this container (libs are present here). Not a hard failure --
+          # some tools have no --version and exit non-zero.
+          while IFS= read -r cmd; do
+            [ -z "$cmd" ] && continue
+            bin="${SMOKE}/x/usr/bin/${cmd}"
+            [ -x "$bin" ] || bin="${SMOKE}/x/usr/sbin/${cmd}"
+            if "$bin" --version >/dev/null 2>&1 || "$bin" -V >/dev/null 2>&1; then
+              echo "  runs: ${cmd}"
+            else
+              echo "  (note) ${cmd} did not respond to --version/-V"
+            fi
+          done < "${SMOKE}/x/usr/lib/cli-tools/manifest.txt"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error title=smoke::cli-tools.raw failed validation, refusing to publish" >&2
+            exit 1
+          fi
+          echo "smoke-test OK"
+
+      - name: Generate checksum
+        run: |
+          sha256sum cli-tools.raw > cli-tools.raw.sha256
+          cat cli-tools.raw.sha256
+
+      - name: Render release notes
+        env:
+          SUITE: ${{ needs.resolve.outputs.suite }}
+          BUILD_DATE: ${{ steps.build_id.outputs.build_date }}
+          RUN_NUMBER: ${{ steps.build_id.outputs.run_number }}
+          BUILD_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "## cli-tools sysext for TrueNAS SCALE"
+            echo ""
+            echo "A bundle of common CLI utilities not shipped in stock TrueNAS SCALE,"
+            echo "merged into \`/usr\` via systemd-sysext. Kernel-independent: this single"
+            echo "release works on every TrueNAS version."
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Built (UTC) | \`${BUILD_DATE}\` |"
+            echo "| apt base | Debian \`${SUITE}\` |"
+            echo "| Source commit | [\`${BUILD_SHA}\`](https://github.com/${REPO}/commit/${BUILD_SHA}) |"
+            echo ""
+            echo "### Included tools"
+            echo '```'
+            sort "${SYSEXT_ROOT}/usr/lib/cli-tools/versions.txt"
+            echo '```'
+            echo ""
+            echo "### Install"
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash"
+            echo '```'
+            echo ""
+            echo "### Verify"
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --check"
+            echo '```'
+            echo ""
+            echo "### Uninstall"
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/uninstall.sh | sudo bash"
+            echo '```'
+            echo ""
+            echo "### Checksum"
+            echo "See \`cli-tools.raw.sha256\`."
+          } > release-notes.md
+          echo "=== Rendered release notes ==="
+          cat release-notes.md
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-tools-sysext-${{ steps.build_id.outputs.build_date }}-r${{ steps.build_id.outputs.run_number }}
+          path: |
+            cli-tools.raw
+            cli-tools.raw.sha256
+            release-notes.md
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: true
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-tools-sysext-${{ needs.build.outputs.build_date }}-r${{ needs.build.outputs.run_number }}
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.build.outputs.build_date }}-r${{ needs.build.outputs.run_number }}
+          name: "cli-tools ${{ needs.build.outputs.build_date }} (r${{ needs.build.outputs.run_number }})"
+          body_path: release-notes.md
+          files: |
+            cli-tools.raw
+            cli-tools.raw.sha256
+            scripts/cli-tools-lib.sh
+            scripts/install.sh
+            scripts/restore.sh
+            scripts/uninstall.sh
+          draft: false
+          prerelease: false
+          make_latest: ${{ needs.resolve.outputs.mark_latest }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create hardware-test issue for auto-build
+        if: needs.resolve.outputs.mark_latest == 'false'
+        uses: actions/github-script@v9
+        env:
+          BUILD_DATE: ${{ needs.build.outputs.build_date }}
+          RUN_NUMBER: ${{ needs.build.outputs.run_number }}
+        with:
+          script: |
+            const tag = `v${process.env.BUILD_DATE}-r${process.env.RUN_NUMBER}`;
+            const title = `Hardware test: cli-tools ${tag}`;
+            const releaseUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${tag}`;
+
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'hardware-test',
+                color: 'FBCA04',
+                description: 'Auto-build awaiting verification on real hardware',
+              });
+            } catch (e) {
+              if (e.status !== 422) throw e;  // 422 = label already exists
+            }
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'hardware-test',
+              per_page: 100,
+            });
+            if (existing.data.some(i => i.title.includes(tag))) {
+              console.log(`Open hardware-test issue already exists for ${tag}, skipping`);
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              labels: ['hardware-test'],
+              body: [
+                `An auto-build published a new release that needs verification before being promoted to **Latest**.`,
+                ``,
+                `**Release:** [${tag}](${releaseUrl})`,
+                ``,
+                `### Test checklist`,
+                `- [ ] Install on a TrueNAS SCALE system`,
+                `- [ ] \`sudo ./install.sh --check\` reports all OK`,
+                `- [ ] Spot-check a few tools actually run (e.g. \`btop --version\`, \`nmap --version\`, \`mtr --help\`)`,
+                `- [ ] Reboot and confirm the PREINIT script re-merges the sysext`,
+                ``,
+                `### Promote`,
+                `Once verified, go to the [release page](${releaseUrl}) and click **Set as latest**, then close this issue.`,
+              ].join('\n'),
+            });
+            console.log(`Created hardware-test issue for ${tag}`);
