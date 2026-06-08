@@ -8,13 +8,13 @@ on:
         required: false
         default: ''
       mark_latest:
-        description: 'Mark this release as Latest on GitHub'
+        description: 'true = publish straight to Latest; false (default) = prerelease + hardware-test gate'
         required: false
         type: choice
         options:
           - 'true'
           - 'false'
-        default: 'true'
+        default: 'false'
 
   workflow_call:
     inputs:
@@ -440,6 +440,7 @@ jobs:
                 `An auto-build published a new release that needs verification before being promoted to **Latest**.`,
                 ``,
                 `**Release:** [${tag}](${releaseUrl})`,
+                `<!-- release-tag: ${tag} -->`,
                 ``,
                 `### Test checklist`,
                 `- [ ] Install on a TrueNAS SCALE system`,
@@ -448,7 +449,7 @@ jobs:
                 `- [ ] Reboot and confirm the PREINIT script re-merges the sysext`,
                 ``,
                 `### Promote`,
-                `This build is published as a **pre-release**, so it is not served by \`releases/latest\` yet. Once verified, edit the [release](${releaseUrl}): uncheck **Set as a pre-release**, check **Set as the latest release**, then close this issue.`,
+                `This build is published as a **pre-release**, so it is not served by \`releases/latest\` yet. Once you've verified it, **close this issue as completed** — that automatically promotes [\`${tag}\`](${releaseUrl}) to the latest release and appends the changelog. No manual editing needed.`,
               ].join('\n'),
             });
             console.log(`Created hardware-test issue for ${tag}`);
