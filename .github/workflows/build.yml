@@ -48,6 +48,7 @@ jobs:
     outputs:
       suite: ${{ steps.params.outputs.suite }}
       mark_latest: ${{ steps.params.outputs.mark_latest }}
+      prerelease: ${{ steps.params.outputs.prerelease }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -64,11 +65,17 @@ jobs:
           TRACKED_SUITE=$(jq -r '.debian.suite' .github/tracked-versions.json)
           SUITE="${INPUT_SUITE:-$TRACKED_SUITE}"
           MARK_LATEST="${INPUT_MARK_LATEST:-true}"
+          # An unverified auto-build (mark_latest=false) is published as a
+          # PRERELEASE so GitHub excludes it from /releases/latest and
+          # releases/latest/download until a human promotes it. make_latest
+          # alone does not hold this gate with action-gh-release@v3.
+          if [ "$MARK_LATEST" = "true" ]; then PRERELEASE="false"; else PRERELEASE="true"; fi
           {
             echo "suite=${SUITE}"
             echo "mark_latest=${MARK_LATEST}"
+            echo "prerelease=${PRERELEASE}"
           } >> "$GITHUB_OUTPUT"
-          echo "Resolved: suite=${SUITE} mark_latest=${MARK_LATEST}"
+          echo "Resolved: suite=${SUITE} mark_latest=${MARK_LATEST} prerelease=${PRERELEASE}"
 
   build:
     needs: resolve
@@ -383,7 +390,7 @@ jobs:
             scripts/restore.sh
             scripts/uninstall.sh
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.resolve.outputs.prerelease }}
           make_latest: ${{ needs.resolve.outputs.mark_latest }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -441,7 +448,7 @@ jobs:
                 `- [ ] Reboot and confirm the PREINIT script re-merges the sysext`,
                 ``,
                 `### Promote`,
-                `Once verified, go to the [release page](${releaseUrl}) and click **Set as latest**, then close this issue.`,
+                `This build is published as a **pre-release**, so it is not served by \`releases/latest\` yet. Once verified, edit the [release](${releaseUrl}): uncheck **Set as a pre-release**, check **Set as the latest release**, then close this issue.`,
               ].join('\n'),
             });
             console.log(`Created hardware-test issue for ${tag}`);
