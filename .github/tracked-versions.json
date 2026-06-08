@@ -6,7 +6,7 @@
     "btop": {
       "source": "github",
       "repo": "aristocratos/btop",
-      "version": "v1.4.4",
+      "version": "v1.4.7",
       "asset": "btop-x86_64-linux-musl.tbz",
       "extract": "btop/bin/btop",
       "bin": "btop"
@@ -21,7 +21,7 @@
     "yq": {
       "source": "github",
       "repo": "mikefarah/yq",
-      "version": "v4.45.4",
+      "version": "v4.53.3",
       "asset": "yq_linux_amd64",
       "bin": "yq"
     },
