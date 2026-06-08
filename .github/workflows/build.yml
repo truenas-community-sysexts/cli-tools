@@ -377,6 +377,7 @@ jobs:
           name: cli-tools-sysext-${{ needs.build.outputs.build_date }}-r${{ needs.build.outputs.run_number }}
 
       - name: Create GitHub release
+        id: release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.build.outputs.build_date }}-r${{ needs.build.outputs.run_number }}
@@ -389,11 +390,23 @@ jobs:
             scripts/install.sh
             scripts/restore.sh
             scripts/uninstall.sh
-          draft: false
-          prerelease: ${{ needs.resolve.outputs.prerelease }}
-          make_latest: ${{ needs.resolve.outputs.mark_latest }}
+          # Draft first so assets attach even on immutable-release repos.
+          draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the draft (prerelease gate, or Latest on override)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REL_ID: ${{ steps.release.outputs.id }}
+          MARK_LATEST: ${{ needs.resolve.outputs.mark_latest }}
+        run: |
+          if [ "$MARK_LATEST" = "true" ]; then
+            gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -f make_latest=true
+          else
+            gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -F prerelease=true
+          fi
 
       - name: Create hardware-test issue for auto-build
         if: needs.resolve.outputs.mark_latest == 'false'
