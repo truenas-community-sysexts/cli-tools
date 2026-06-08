@@ -28,7 +28,10 @@
     "iotop": {
       "source": "apt",
       "package": "iotop-c",
-      "bin": "iotop"
+      "bin": "iotop",
+      "links": {
+        "iotop": "iotop-c"
+      }
     },
     "iftop": {
       "source": "apt",

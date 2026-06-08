@@ -88,6 +88,15 @@ for name, spec in tools.items():
         if not isinstance(pkg, str) or not pkg.strip():
             fail(f"tool {name!r}: apt source requires non-empty 'package'")
 
+    # Optional 'links': extra command-name symlinks {linkname: target}.
+    links = spec.get("links")
+    if links is not None:
+        if not isinstance(links, dict) or not links:
+            fail(f"tool {name!r}: 'links' must be a non-empty object of name->target")
+        for ln, tgt in links.items():
+            if not isinstance(ln, str) or not ln.strip() or not isinstance(tgt, str) or not tgt.strip():
+                fail(f"tool {name!r}: 'links' entries must be non-empty strings (got {ln!r}: {tgt!r})")
+
 n = len(tools)
 apt = sum(1 for s in tools.values() if s.get("source") == "apt")
 dl = n - apt

@@ -198,6 +198,27 @@ jobs:
 
       - name: Finalize sysext tree
         run: |
+          TVERS=.github/tracked-versions.json
+
+          # Create any declared command-name symlinks (e.g. iotop -> iotop-c,
+          # since the iotop-c package's binary isn't named `iotop` and its
+          # alternatives symlink lives in /etc, which a sysext doesn't merge).
+          jq -r '.tools | to_entries[]
+                 | select(.value.links != null)
+                 | .value.links | to_entries[]
+                 | [.key, .value] | @tsv' "$TVERS" \
+          | while IFS=$'\t' read -r linkname target; do
+              # Place the link next to its target, in whichever dir it landed.
+              for d in usr/bin usr/sbin; do
+                if [ -e "${SYSEXT_ROOT}/${d}/${target}" ]; then
+                  ln -sf "$target" "${SYSEXT_ROOT}/${d}/${linkname}"
+                  echo "${linkname}" >> "${SYSEXT_ROOT}/usr/lib/cli-tools/manifest.txt"
+                  echo "  link: ${d}/${linkname} -> ${target}"
+                  break
+                fi
+              done
+            done
+
           # Bundle the PREINIT script so install.sh can extract it from the .raw.
           install -m 0755 scripts/cli-tools-preinit.sh \
             "${SYSEXT_ROOT}/usr/lib/cli-tools/cli-tools-preinit.sh"
