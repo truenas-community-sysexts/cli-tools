@@ -128,13 +128,21 @@ jobs:
             esac
           }
 
-          # name  source  version  repo  asset  url  extract  bin
-          jq -r '.tools | to_entries[]
+          # Emit one compact JSON object per tool and pull each field with jq.
+          # (A @tsv row would collapse the empty url/extract columns, since
+          # read treats tab as whitespace -- shifting every later field.)
+          jq -c '.tools | to_entries[]
                  | select(.value.source=="github" or .value.source=="url")
-                 | [.key, .value.source, .value.version, (.value.repo//""),
-                    (.value.asset//""), (.value.url//""), (.value.extract//""),
-                    .value.bin] | @tsv' "$TVERS" \
-          | while IFS=$'\t' read -r name source version repo asset url extract bin; do
+                 | {name: .key} + .value' "$TVERS" \
+          | while IFS= read -r row; do
+              name=$(jq -r '.name' <<<"$row")
+              source=$(jq -r '.source' <<<"$row")
+              version=$(jq -r '.version' <<<"$row")
+              repo=$(jq -r '.repo // ""' <<<"$row")
+              asset=$(jq -r '.asset // ""' <<<"$row")
+              url=$(jq -r '.url // ""' <<<"$row")
+              extract=$(jq -r '.extract // ""' <<<"$row")
+              bin=$(jq -r '.bin' <<<"$row")
               echo "=== ${name} (${source} ${version}) ==="
               work=$(mktemp -d)
               if [ "$source" = "github" ]; then
