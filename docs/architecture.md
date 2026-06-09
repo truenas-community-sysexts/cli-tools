@@ -5,7 +5,7 @@
 A systemd system extension (sysext) is a disk image whose `/usr` (and `/opt`)
 tree is overlaid onto the running system's `/usr` via an `overlayfs` mount, set
 up by `systemd-sysext`. It's the supported way to add software to an immutable
-OS like TrueNAS SCALE without touching the read-only root.
+OS like TrueNAS without touching the read-only root.
 
 A sysext is recognized by a marker file,
 `usr/lib/extension-release.d/extension-release.<name>`. We set its contents to
