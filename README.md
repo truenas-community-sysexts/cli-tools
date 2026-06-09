@@ -1,6 +1,6 @@
-# CLI Tools Sysext for TrueNAS SCALE
+# CLI Tools Sysext for TrueNAS
 
-A [systemd-sysext](https://www.freedesktop.org/software/systemd/man/systemd-sysext.html) package that adds a curated set of common command-line utilities to TrueNAS SCALE — the tools you reach for over SSH that aren't in the stock image — without modifying the immutable root filesystem.
+A [systemd-sysext](https://www.freedesktop.org/software/systemd/man/systemd-sysext.html) package that adds a curated set of common command-line utilities to TrueNAS — the tools you reach for over SSH that aren't in the stock image — without modifying the immutable root filesystem.
 
 Everything is merged into `/usr` at boot and survives reboots and TrueNAS updates. Because these are plain userspace binaries (not kernel modules), **one release works on every TrueNAS version**.
 
@@ -30,13 +30,13 @@ The exact set is defined in [`.github/tracked-versions.json`](.github/tracked-ve
 | `mtr` | Debian (`mtr-tiny`) | Combined traceroute + ping |
 | `nmap` | Debian | Network/port scanner |
 
-Tools that already ship with TrueNAS SCALE (e.g. `htop`, `smartctl`, `nvme`, `tcpdump`, `iperf3`, `rsync`, `rclone`, `restic`, `jq`, `git`, `vim`, `tmux`) are intentionally **not** bundled.
+Tools that already ship with TrueNAS (e.g. `htop`, `smartctl`, `nvme`, `tcpdump`, `iperf3`, `rsync`, `rclone`, `restic`, `jq`, `git`, `vim`, `tmux`) are intentionally **not** bundled.
 
 ## Quick Start
 
 ### Prerequisites
 
-- TrueNAS SCALE 25.10 or newer
+- TrueNAS 25.10 or newer
 - Root/sudo access
 - A data pool (for persistent storage) and internet access (to download the release)
 
