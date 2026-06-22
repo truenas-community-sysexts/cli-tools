@@ -51,7 +51,7 @@ jobs:
       prerelease: ${{ steps.params.outputs.prerelease }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           sparse-checkout: .github/tracked-versions.json
           sparse-checkout-cone-mode: false
@@ -96,7 +96,7 @@ jobs:
             squashfs-tools zstd patchelf jq coreutils git
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Compute build identifier
         id: build_id
@@ -366,7 +366,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           sparse-checkout: scripts
           sparse-checkout-cone-mode: true
