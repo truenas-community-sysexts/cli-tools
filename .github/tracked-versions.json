@@ -21,7 +21,7 @@
     "yq": {
       "source": "github",
       "repo": "mikefarah/yq",
-      "version": "v4.53.4",
+      "version": "v4.53.6",
       "asset": "yq_linux_amd64",
       "bin": "yq"
     },
