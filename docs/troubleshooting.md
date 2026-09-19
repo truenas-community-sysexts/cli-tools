@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with the built-in probe — it reports most of the issues below:
+Start with the built-in probe - it reports most of the issues below:
 
 ```bash
 sudo ./install.sh --check
@@ -9,7 +9,7 @@ sudo ./install.sh --check
 ## A tool isn't on `PATH`
 
 1. Is the sysext merged? `systemd-sysext list` should show `cli-tools`.
-2. If not, re-merge: `sudo systemd-sysext refresh` (or reboot — the PREINIT
+2. If not, re-merge: `sudo systemd-sysext refresh` (or reboot - the PREINIT
    script does this automatically).
 3. Confirm the command is actually in the bundle:
    `cat /usr/lib/cli-tools/manifest.txt`. Tools that already ship with TrueNAS
@@ -19,7 +19,7 @@ sudo ./install.sh --check
 
 The PREINIT script re-activates the sysext on boot. If they're gone:
 
-1. `sudo ./install.sh --check` — look at the "PREINIT script registered" and
+1. `sudo ./install.sh --check` - look at the "PREINIT script registered" and
    "PREINIT completed successfully this boot" lines.
 2. Inspect the boot log: `journalctl -b -t cli-tools-preinit`.
 3. Confirm the persistent copy exists: `ls /mnt/*/.config/cli-tools/`.
@@ -28,7 +28,7 @@ The PREINIT script re-activates the sysext on boot. If they're gone:
 ## The tools disappear after a TrueNAS update
 
 This is expected mid-update (`/usr` is reset) and the PREINIT script restores
-them on the next boot. If they don't come back, re-run `install.sh` — the
+them on the next boot. If they don't come back, re-run `install.sh` - the
 persistent copy on the data pool is unaffected by updates.
 
 ## `install.sh` can't pick a pool
@@ -48,7 +48,7 @@ script scans). `--persist-path` enforces this shape.
 The apt-sourced tools carry their own libraries under
 `/usr/lib/cli-tools/lib` with an `rpath`, so this should not happen. If it
 does, it usually means the tool was built against a glibc newer than the
-host's. Check `debian.suite` in `tracked-versions.json` — it should be the
+host's. Check `debian.suite` in `tracked-versions.json` - it should be the
 *oldest* Debian base among the TrueNAS versions you run. Verify with:
 
 ```bash
