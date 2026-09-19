@@ -2,13 +2,14 @@
 
 A [systemd-sysext](https://www.freedesktop.org/software/systemd/man/systemd-sysext.html) package that adds a curated set of common command-line utilities to TrueNAS - the tools you reach for over SSH that aren't in the stock image - without modifying the immutable root filesystem.
 
-Everything is merged into `/usr` at boot and survives reboots and TrueNAS updates. Because these are plain userspace binaries (not kernel modules), **one release works on every TrueNAS version**.
+Everything is merged into `/usr` at boot and survives reboots and TrueNAS updates. Because these are plain userspace binaries (not kernel modules), **one release works on every TrueNAS version**, and a hardware test on each TrueNAS train approves it for that train (see [Releases](#releases)).
 
 ## Documentation
 
 | Doc | Contents |
 | --- | --- |
 | [Quick Start](#quick-start) | Install, verify, uninstall |
+| [Releases](#releases) | Per-train approval, pinning a release |
 | [docs/install.md](docs/install.md) | Install options, persistence, scripts reference |
 | [docs/build.md](docs/build.md) | Build process, adding a tool, automated updates |
 | [docs/architecture.md](docs/architecture.md) | sysext layout, self-contained binary bundling, read-only constraints |
@@ -42,23 +43,22 @@ Tools that already ship with TrueNAS (e.g. `htop`, `smartctl`, `nvme`, `tcpdump`
 
 ### Install
 
-Downloads the latest release and sets up persistence:
+Installs the newest release a hardware test approved for your TrueNAS train and sets up persistence:
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/cli-tools/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash
 ```
 
-With an explicit pool for persistence:
+With an explicit pool for persistence (flags for the installer go after `bash -s --`):
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/cli-tools/releases/latest/download/install.sh -o install.sh
-sudo bash install.sh --pool=fast
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash -s -- --pool=fast
 ```
 
 ### Verify
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/cli-tools/releases/latest/download/install.sh | sudo bash -s -- --check
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash -s -- --check
 ```
 
 Or just run one of the tools: `btop`, `tree`, `nmap --version`.
@@ -66,7 +66,17 @@ Or just run one of the tools: `btop`, `tree`, `nmap --version`.
 ### Uninstall
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/cli-tools/releases/latest/download/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash -s -- --uninstall
+```
+
+## Releases
+
+**Each release is approved per TrueNAS train.** The train is the major version from 26 on (every 26.x, betas included, is train `26`) and major.minor before that (`25.10`). A release starts as a pre-release with one hardware-test issue per supported train, and closing a train's issue as completed approves it for that train's boxes only. `get.sh` runs the install scripts of the newest release approved for your train, and that release's `install.sh` downloads its own `cli-tools.raw`. Full releases from before per-train approval count for every train. If no release is approved for your train yet, it stops and points at the open hardware tests instead of installing anything untested.
+
+To install one exact release (this skips the approval check, which is how a tester installs a release under test):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash -s -- --release=v2026.08.21-r11
 ```
 
 ## How It Works

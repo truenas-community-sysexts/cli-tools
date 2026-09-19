@@ -99,6 +99,9 @@ jobs:
               echo "::error title=push::git push failed after rebase retry"; exit 1; }
           fi
 
+      # A tool bump cuts a gated release: build.yml publishes a PRERELEASE and
+      # opens one hardware-test issue per TrueNAS train. Closing a train's
+      # issue approves the release for that train (promote.yml).
       - name: Trigger build
         if: steps.check.outputs.changed == '1'
         uses: actions/github-script@v9
@@ -110,6 +113,5 @@ jobs:
               repo: context.repo.repo,
               workflow_id: 'build.yml',
               ref: 'main',
-              inputs: { mark_latest: 'false' }
             });
-            console.log('Dispatched build.yml (mark_latest=false) after tool version bump');
+            console.log('Dispatched build.yml after tool version bump');

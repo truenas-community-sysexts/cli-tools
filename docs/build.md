@@ -8,8 +8,8 @@ Docker if you want.
 
 `.github/workflows/build.yml` has three jobs:
 
-1. **resolve**: reads `debian.suite` and the `mark_latest` input from
-   `.github/tracked-versions.json` / workflow inputs.
+1. **resolve**: reads `debian.suite` from `.github/tracked-versions.json`
+   (or the `suite` input).
 2. **build**: runs in a `debian:<suite>-slim` container and:
    - fetches the prebuilt static tools (`source: github` / `source: url`),
    - `apt-get install`s the Debian tools (`source: apt`) and bundles each one
@@ -20,12 +20,52 @@ Docker if you want.
    - smoke-tests the image (extension-release valid, preinit present, every
      manifest command is an executable, best-effort `--version`),
    - uploads the artifact.
-3. **release**: publishes a GitHub release with `cli-tools.raw`, its
-   `.sha256`, and the install scripts. `make_latest` is controlled by the
-   `mark_latest` input.
+3. **release**: publishes a GitHub **pre-release** with `cli-tools.raw`, its
+   `.sha256`, `install.sh`, `uninstall.sh`, `restore.sh` and
+   `cli-tools-lib.sh` (everything `get.sh` downloads), then opens one
+   hardware-test issue per TrueNAS train in `tracked-versions.json` (see
+   [Per-train approval](#per-train-approval)).
 
 Trigger a build manually from the Actions tab (**Build cli-tools Sysext** →
-*Run workflow*). Leave `mark_latest=true` for a verified manual build.
+*Run workflow*). Every build, manual or automatic, starts as a pre-release:
+there is no publish-straight-to-Latest option.
+
+## Per-train approval
+
+A hardware test on a TrueNAS train approves a release for that train's boxes
+only. `tracked-versions.json` lists the supported trains:
+
+```jsonc
+"trains": [
+  { "key": "25.10", "name": "TrueNAS 25.10", "channel": "stable" },
+  { "key": "26", "name": "TrueNAS 26 beta", "channel": "preview" }
+]
+```
+
+`key` is the train `get.sh` derives from the TrueNAS version (the major version
+from 26 on, major.minor before that), `name` goes into issue titles, and
+`channel` picks the label: `hardware-test` for a stable train,
+`preview-hardware-test` for a preview one.
+
+- **build.yml** opens one issue per train, titled e.g.
+  `Hardware test: cli-tools <date> | any TrueNAS 25.10 system, no special hardware | <tag>`,
+  with `<!-- release-tag -->` and `<!-- train -->` markers. It skips a train
+  that already has an open issue for the tag.
+- **promote.yml**: closing a train's issue as completed appends
+  `<!-- verified-train: <key> -->` to the release notes. On the release's
+  first approval the same update also turns the pre-release into a full
+  release and appends the changelog. GitHub's "Latest" follows the newest
+  release approved for a stable train, but nothing selects by it.
+- **get.sh** (and `install.sh`/`uninstall.sh` run on their own) install the
+  newest release whose notes carry the box's train, or a full release with no
+  marker at all (from before per-train approval, so approved for every train).
+
+Why there is no publish-straight-to-Latest option: a full release without
+markers counts as approved for every train, so it would reach every box
+untested.
+
+When TrueNAS 26.0 ships, add `26` as a stable train and move the preview entry
+on to the next beta.
 
 ## The source of truth: `tracked-versions.json`
 
@@ -56,8 +96,9 @@ If `extract` is omitted, the downloaded file *is* the binary. Otherwise it's an
 archive (`.tbz`/`.tar.gz`/`.tar.xz`/`.zip`) and `extract` is the path of the
 binary inside it.
 
-The shape is enforced by `.github/scripts/validate-tracked-versions.sh` in the
-lint workflow.
+The shape (including `trains`, see [Per-train approval](#per-train-approval))
+is enforced by `.github/scripts/validate-tracked-versions.sh` in the lint
+workflow.
 
 ## Adding a tool
 
@@ -78,10 +119,10 @@ the manifest, so they all end up on `PATH`.
 
 `.github/workflows/check-releases.yml` runs daily. For each `github` tool it
 queries the latest upstream release; if newer than tracked, it bumps
-`tracked-versions.json`, pushes the change, and dispatches `build.yml` with
-`mark_latest=false`. That build publishes a release but does **not** mark it
-latest, and opens a `hardware-test` issue. After verifying on real hardware,
-promote the release to *Latest* and close the issue.
+`tracked-versions.json`, pushes the change, and dispatches `build.yml`. That
+build publishes a pre-release and opens one hardware-test issue per train.
+Closing a train's issue as completed after testing on that train approves the
+release for it (promote.yml).
 
 - `apt` tools are **not** polled - they float with the pinned Debian suite and
   refresh on every rebuild.

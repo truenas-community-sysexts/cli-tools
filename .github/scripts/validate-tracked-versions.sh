@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Validate that .github/tracked-versions.json has the shape the rest of the
-# CI machinery (check-releases.yml, build.yml) assumes.
+# CI machinery assumes: build.yml and check-releases.yml read `debian` and
+# `tools`; build.yml and promote.yml read the `trains` list.
 #
 # Run locally:
 #   .github/scripts/validate-tracked-versions.sh
@@ -46,6 +47,36 @@ suite = debian.get("suite")
 suite_re = re.compile(r"^[a-z]+$")
 if not isinstance(suite, str) or not suite_re.match(suite):
     fail(f"'debian.suite' missing or malformed (got {suite!r}); expected a Debian codename e.g. bookworm")
+
+# --- trains: every TrueNAS train a release supports. build.yml opens one
+# hardware-test issue per train for each release, and promote.yml writes
+# `verified-train: <key>` into the release notes when one closes as completed.
+trains = data.get("trains")
+if not isinstance(trains, list) or not trains:
+    fail("'trains' missing or not a non-empty list")
+keys, names = set(), set()
+for i, t in enumerate(trains):
+    where = f"trains[{i}]"
+    if not isinstance(t, dict):
+        fail(f"{where} is not an object")
+    key = t.get("key")
+    # Shape only. That each key is one get.sh's truenas_train_key can
+    # produce is tested against the shell function itself
+    # (tests/test_release_selection.py), so the rule lives in one place.
+    if not isinstance(key, str) or not re.match(r"^\d+(\.\d+)?$", key):
+        fail(f"{where}.key missing or malformed (got {key!r}); expected e.g. 25.10 or 26")
+    if key in keys:
+        fail(f"{where}.key {key!r} is listed twice")
+    keys.add(key)
+    name = t.get("name")
+    if not isinstance(name, str) or not name.strip():
+        fail(f"{where}.name missing or empty (got {name!r}); expected e.g. 'TrueNAS 25.10'")
+    if name in names:
+        fail(f"{where}.name {name!r} is listed twice (issue titles and the duplicate check use it)")
+    names.add(name)
+    channel = t.get("channel")
+    if channel not in ("stable", "preview"):
+        fail(f"{where}.channel must be 'stable' or 'preview' (got {channel!r})")
 
 # --- tools: map of tool-name -> source descriptor.
 tools = data.get("tools")
@@ -100,5 +131,6 @@ for name, spec in tools.items():
 n = len(tools)
 apt = sum(1 for s in tools.values() if s.get("source") == "apt")
 dl = n - apt
-print(f"tracked-versions OK: {n} tools ({dl} prebuilt, {apt} apt) on Debian {suite}")
+summary = ", ".join(f"{t['key']} ({t['channel']})" for t in trains)
+print(f"tracked-versions OK: {n} tools ({dl} prebuilt, {apt} apt) on Debian {suite}; trains {summary}")
 PY

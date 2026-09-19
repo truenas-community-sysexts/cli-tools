@@ -6,11 +6,15 @@
 #
 # All assembly happens on GitHub Actions; this script only downloads and
 # activates the pre-built cli-tools.raw. Because the tools are plain userspace
-# binaries (not kernel modules), one release works on every TrueNAS version --
-# the installer always fetches the LATEST release rather than matching a kernel.
+# binaries (not kernel modules), one release works on every TrueNAS version,
+# but a hardware test approves it per TrueNAS train. Without --release (or a
+# local image) the installer downloads the newest release approved for this
+# box's train, and stops if there is none.
 #
-# Usage: curl -fsSL <release-url>/install.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash
+#        (get.sh picks the approved release and runs its install.sh)
 #    or: sudo ./install.sh [path-to-cli-tools.raw]
+#    or: sudo ./install.sh --release=v2026.08.21-r11
 #    or: sudo ./install.sh --pool=fast
 #    or: sudo ./install.sh --check          (probe an existing install)
 #    or: sudo ./install.sh --dry-run        (validate without modifying)
@@ -255,8 +259,209 @@ resolve_persist_dir() {
     done
 }
 
+# BEGIN approved-release (a verbatim copy lives in get.sh, scripts/install.sh
+# and scripts/uninstall.sh, each a self-contained curl|bash script;
+# tests/test_release_selection.py fails CI when the copies differ)
+
+# TrueNAS version of this box, read from the middleware. Retried: midclt can
+# be briefly unavailable right after boot.
+detect_truenas_version() {
+    local v i
+    for i in 1 2 3; do
+        v=$(midclt call system.info 2>/dev/null | python3 -c '
+import sys, json
+try:
+    print(json.load(sys.stdin)["version"])
+except Exception:
+    pass' 2>/dev/null) || true
+        if [ -n "$v" ]; then printf '%s\n' "$v"; return 0; fi
+        [ "$i" -lt 3 ] && sleep 1
+    done
+    return 1
+}
+
+# Train key of a TrueNAS version: the major version from 26 on (26.0.0-BETA.3
+# and 26.1.2 are both train 26), major.minor before that (25.10.7 is 25.10,
+# 25.04.2.6 is 25.04). Fails on anything else.
+truenas_train_key() {
+    local v="$1" major minor
+    major="${v%%.*}"
+    case "$major" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "$major" -ge 26 ]; then
+        printf '%s\n' "$major"
+        return 0
+    fi
+    case "$v" in *.*) ;; *) return 1 ;; esac
+    minor="${v#*.}"
+    minor="${minor%%[!0-9]*}"
+    [ -n "$minor" ] || return 1
+    printf '%s.%s\n' "$major" "$minor"
+}
+
+# Every page of the repo's releases, appended to $1 as one JSON array per
+# page. Only a full page can have more behind it; anything else (short page,
+# API error object) ends the loop, and the selection reports API errors.
+fetch_release_pages() {
+    local out="$1" page=1 page_json page_len
+    : > "$out"
+    while :; do
+        page_json=$(curl -sS --max-time 30 "https://api.github.com/repos/${REPO}/releases?per_page=100&page=${page}") \
+            || { echo "ERROR: Failed to query GitHub releases" >&2; return 1; }
+        printf '%s\n' "$page_json" >> "$out"
+        page_len=$(printf '%s' "$page_json" | python3 -c "
+import sys, json
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    print(0)
+else:
+    print(len(doc) if isinstance(doc, list) else 0)
+")
+        [ "$page_len" -eq 100 ] || break
+        page=$((page + 1))
+    done
+}
+
+# Newest release approved for train $2 on a box running TrueNAS $1, chosen
+# from the release pages in $3. Prints its tag; explains on stderr and fails
+# when there is none.
+select_approved_release() {
+    VERSION="$1" TRAIN="$2" REPO="$REPO" python3 -c "
+# BEGIN release-selection (extracted verbatim by tests/test_release_selection.py;
+# single-quoted strings only, \x60 stands for backtick, no dollar signs: this
+# code lives inside a double-quoted bash string)
+import sys, json, os, re
+# stdin carries one JSON array per fetched API page, concatenated.
+decoder = json.JSONDecoder()
+text = sys.stdin.read()
+data = []
+pos = 0
+while pos < len(text):
+    if text[pos].isspace():
+        pos += 1
+        continue
+    try:
+        doc, pos = decoder.raw_decode(text, pos)
+    except ValueError:
+        print('Failed to parse GitHub API response', file=sys.stderr)
+        sys.exit(1)
+    if isinstance(doc, dict) and 'message' in doc:
+        msg = doc['message']
+        if 'rate limit' in msg.lower():
+            print('GitHub API rate limit exceeded (60 requests/hour for unauthenticated calls).', file=sys.stderr)
+            print('Wait a few minutes and try again.', file=sys.stderr)
+        else:
+            print(f'GitHub API error: {msg}', file=sys.stderr)
+        sys.exit(1)
+    elif isinstance(doc, list):
+        data.extend(doc)
+    else:
+        print('Failed to parse GitHub API response', file=sys.stderr)
+        sys.exit(1)
+if not text.strip():
+    print('Failed to parse GitHub API response', file=sys.stderr)
+    sys.exit(1)
+version = os.environ['VERSION']
+train = os.environ['TRAIN']
+repo = os.environ.get('REPO', '')
+# The channel (preview on a BETA/RC box, else stable) no longer decides what
+# installs: every box takes the newest release approved for its train. It
+# only picks which hardware-test issues the no-match message points at.
+vu = version.upper()
+is_preview = ('-BETA' in vu) or ('-RC' in vu)
+def preview_release(release):
+    # This repo's v<date>-r<run> tags carry no BETA/RC marker (one release
+    # serves every train), so this never fires here; it keeps the approval
+    # gate below the same expression as in the per-kernel repos (coral,
+    # hailo, memryx).
+    tu = release.get('tag_name', '').upper()
+    return ('-BETA' in tu) or ('-RC' in tu)
+# Approval gate. promote.yml writes one verified-train line into the notes
+# for each train whose hardware test signed the release off. A release with a
+# line for this train is approved here; lines for other trains only are not.
+# A full release with no line at all predates per-train sign-off and is
+# grandfathered for every train. Nothing else qualifies: there is no fallback
+# to an unverified build, on stable or preview boxes.
+vt_re = re.compile(r'^[ \t]*<!--\s*verified-train:\s*([^\s>]+?)\s*-->', re.M)
+def verified_trains(release):
+    return set(vt_re.findall(release.get('body') or ''))
+def approved(release):
+    trains = verified_trains(release)
+    if trains:
+        return train in trains
+    return not release.get('prerelease') and not preview_release(release)
+def published(release):
+    return release.get('published_at') or release.get('created_at') or ''
+candidates = [r for r in data
+              if not r.get('draft')
+              and approved(r)]
+if not candidates:
+    print(f'No release is approved for TrueNAS train {train} yet (this box runs {version}).', file=sys.stderr)
+    print('A hardware test on a train approves a release for that train only, and nothing', file=sys.stderr)
+    print('unapproved is installed.', file=sys.stderr)
+    pending = sorted([r for r in data if not r.get('draft')], key=published, reverse=True)
+    if pending:
+        print('Newest releases waiting for a hardware test on this train:', file=sys.stderr)
+        for r in pending[:5]:
+            t = r.get('tag_name', '?')
+            mark = ' (prerelease)' if r.get('prerelease') else ''
+            print(f'  {t}{mark}', file=sys.stderr)
+    label = 'preview-hardware-test' if is_preview else 'hardware-test'
+    print('Open hardware tests (each issue title names its train):', file=sys.stderr)
+    print(f'  https://github.com/{repo}/issues?q=is%3Aissue+is%3Aopen+label%3A{label}', file=sys.stderr)
+    sys.exit(1)
+candidates.sort(key=published, reverse=True)
+print(candidates[0]['tag_name'], end='')
+# END release-selection
+" < "$3"
+}
+
+# The release to use on this box when none is pinned with --release: the
+# newest one approved for its train. Prints the tag.
+approved_release_tag() {
+    local version train pages tag
+    version=$(detect_truenas_version) || {
+        echo "ERROR: could not read the TrueNAS version (midclt call system.info)." >&2
+        echo "       Run this as root on TrueNAS, or pin a release with --release=TAG." >&2
+        return 1
+    }
+    train=$(truenas_train_key "$version") || {
+        echo "ERROR: cannot derive a TrueNAS train from version '${version}'" >&2
+        return 1
+    }
+    pages=$(mktemp) || return 1
+    if fetch_release_pages "$pages" && tag=$(select_approved_release "$version" "$train" "$pages"); then
+        rm -f "$pages"
+        echo "TrueNAS ${version} (train ${train}): newest approved release is ${tag}" >&2
+        printf '%s\n' "$tag"
+        return 0
+    fi
+    rm -f "$pages"
+    return 1
+}
+# END approved-release
+
 # REPO can be overridden via --repo=OWNER/NAME or CLI_TOOLS_REPO env var.
 REPO="${CLI_TOOLS_REPO:-truenas-community-sysexts/cli-tools}"
+RELEASE_TAG=""        # --release=TAG; empty = newest release approved for this train
+RESOLVED_TAG=""       # set by resolve_release_for_install
+RELEASE_DL_BASE=""    # that release's asset download URL
+
+# Decide which release supplies cli-tools.raw (and, when it is not beside
+# this script, cli-tools-lib.sh). Sets RESOLVED_TAG and RELEASE_DL_BASE, once.
+# An explicit --release is trusted verbatim; otherwise use the newest release
+# a hardware test approved for this box's TrueNAS train, and stop when there
+# is none (never an unapproved release, and never GitHub's Latest).
+resolve_release_for_install() {
+    [ -z "$RESOLVED_TAG" ] || return 0
+    if [ -n "$RELEASE_TAG" ]; then
+        RESOLVED_TAG="$RELEASE_TAG"
+    else
+        RESOLVED_TAG=$(approved_release_tag) || exit 1
+    fi
+    RELEASE_DL_BASE="https://github.com/${REPO}/releases/download/${RESOLVED_TAG}"
+    echo "Release: ${RESOLVED_TAG}" >&2
+}
 
 # --- Parse CLI arguments ---
 LOCAL_RAW=""
@@ -279,6 +484,10 @@ for arg in "$@"; do
             PERSIST_PATH="${arg#*=}"
             [ -n "$PERSIST_PATH" ] || { echo "ERROR: --persist-path= requires a non-empty value" >&2; exit 2; }
             ;;
+        --release=*)
+            RELEASE_TAG="${arg#*=}"
+            [ -n "$RELEASE_TAG" ] || { echo "ERROR: --release= requires a tag (e.g., --release=v2026.08.21-r11)" >&2; exit 2; }
+            ;;
         --check) CHECK_MODE=1 ;;
         --dry-run) DRY_RUN=1 ;;
         --help)
@@ -289,6 +498,8 @@ for arg in "$@"; do
             echo "                                Can also be set via CLI_TOOLS_REPO env var."
             echo "  --pool=NAME                   ZFS pool for persistent config (e.g., fast)"
             echo "  --persist-path=PATH           Exact path for persistent config"
+            echo "  --release=TAG                 Install this release (default: the newest release a hardware"
+            echo "                                test approved for this box's TrueNAS train)"
             echo "  --check                       Probe an existing install (read-only) and report status"
             echo "  --dry-run                     Validate everything (downloads, checksums, network) without modifying the system"
             echo "  --help                        Show this help"
@@ -298,7 +509,8 @@ for arg in "$@"; do
             echo "  sudo ./install.sh --check"
             echo "  sudo ./install.sh --dry-run"
             echo "  sudo ./install.sh /tmp/cli-tools.raw"
-            echo "  curl -fsSL <url>/install.sh | sudo bash"
+            echo "  sudo ./install.sh --release=v2026.08.21-r11"
+            echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/get.sh | sudo bash"
             exit 0
             ;;
         *)
@@ -348,8 +560,9 @@ if [ -n "$PERSIST_PATH" ]; then
 fi
 
 # Source shared library (provides cli_tools_init_script_lookup).
-# Try the sibling file first (checkout or extracted release); fall back to
-# downloading from the release for the curl|bash case.
+# Try the sibling file first (checkout, extracted release, or get.sh, which
+# puts the release's copy there); fall back to downloading it from the
+# release this install uses for the curl|bash case.
 _source_cli_tools_lib() {
     local dir
     dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || dir=""
@@ -359,9 +572,10 @@ _source_cli_tools_lib() {
         return 0
     fi
     local tmp
+    resolve_release_for_install
     tmp=$(mktemp /tmp/cli-tools-lib.XXXXXXXXXX)
     if curl -fsSL --max-time 30 \
-           "https://github.com/${REPO}/releases/latest/download/cli-tools-lib.sh" \
+           "${RELEASE_DL_BASE}/cli-tools-lib.sh" \
            -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
         # shellcheck source=scripts/cli-tools-lib.sh
         source "$tmp"
@@ -389,7 +603,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# If a local path is provided, use it; otherwise download the latest release.
+# If a local path is provided, use it; otherwise download the release this
+# install uses (--release, or the newest one approved for this train).
 if [ -n "$LOCAL_RAW" ]; then
     # Reject input path == staging path: cp would refuse with "are the same
     # file" and the EXIT trap would then rm -rf the work dir, deleting the
@@ -404,13 +619,13 @@ if [ -n "$LOCAL_RAW" ]; then
     echo "Using local cli-tools.raw: $LOCAL_RAW"
     cp "$LOCAL_RAW" "${WORK_DIR}/cli-tools.raw"
 else
-    # The tools are kernel-independent, so there is no version to match:
-    # always fetch the latest published release.
-    BASE_URL="https://github.com/${REPO}/releases/latest/download"
-    echo "Downloading latest cli-tools.raw from ${REPO}..."
-    curl -fSL --max-time 600 "${BASE_URL}/cli-tools.raw" -o "${WORK_DIR}/cli-tools.raw" \
+    # The tools are kernel-independent, so there is no kernel to match, but
+    # the release must be one a hardware test approved for this train.
+    resolve_release_for_install
+    echo "Downloading cli-tools.raw from ${REPO} release ${RESOLVED_TAG}..."
+    curl -fSL --max-time 600 "${RELEASE_DL_BASE}/cli-tools.raw" -o "${WORK_DIR}/cli-tools.raw" \
         || { echo "ERROR: Failed to download cli-tools.raw"; exit 1; }
-    curl -fSL --max-time 600 "${BASE_URL}/cli-tools.raw.sha256" -o "${WORK_DIR}/cli-tools.raw.sha256" \
+    curl -fSL --max-time 600 "${RELEASE_DL_BASE}/cli-tools.raw.sha256" -o "${WORK_DIR}/cli-tools.raw.sha256" \
         || { echo "ERROR: Failed to download checksum"; exit 1; }
 
     [ -s "${WORK_DIR}/cli-tools.raw" ] || { echo "ERROR: cli-tools.raw is empty"; exit 1; }
@@ -444,7 +659,7 @@ unsquashfs -q -d "${WORK_DIR}/cli-tools-unpack" "${WORK_DIR}/cli-tools.raw" \
 BUNDLED_PREINIT="${WORK_DIR}/cli-tools-unpack/usr/lib/cli-tools/cli-tools-preinit.sh"
 if [ ! -f "$BUNDLED_PREINIT" ]; then
     echo "ERROR: cli-tools-preinit.sh not found in sysext at /usr/lib/cli-tools/cli-tools-preinit.sh" >&2
-    echo "  Re-fetch a current release: https://github.com/${REPO}/releases/latest" >&2
+    echo "  Re-run the one-liner: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/get.sh | sudo bash" >&2
     exit 1
 fi
 cp "$BUNDLED_PREINIT" "${WORK_DIR}/cli-tools-preinit.sh"
