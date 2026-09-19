@@ -417,7 +417,9 @@ jobs:
         with:
           script: |
             const tag = `v${process.env.BUILD_DATE}-r${process.env.RUN_NUMBER}`;
-            const title = `Hardware test: cli-tools ${tag}`;
+            // Title: what to test | on what | which build. The tag goes last,
+            // verbatim: the duplicate check below matches on it.
+            const title = `Hardware test: cli-tools ${process.env.BUILD_DATE} | any TrueNAS 25.10+ system, no special hardware | ${tag}`;
             const releaseUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${tag}`;
 
             try {
