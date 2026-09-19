@@ -14,7 +14,7 @@ A sysext is recognized by a marker file,
 
 > **Only `/usr` and `/opt` are merged.** Files a sysext places under `/etc`,
 > `/var`, `/bin`, or `/lib` are ignored. Everything we ship therefore lives
-> under `/usr` — binaries in `/usr/bin` and `/usr/sbin`, private libraries and
+> under `/usr` - binaries in `/usr/bin` and `/usr/sbin`, private libraries and
 > data under `/usr/lib/cli-tools` and `/usr/share`.
 
 ## Layout of `cli-tools.raw`
@@ -39,7 +39,7 @@ usr/
 ### Prebuilt static binaries (`btop`, `ncdu`, `yq`)
 
 Downloaded from the upstream project's own release as a static (musl/Zig/Go)
-binary and dropped straight into `/usr/bin`. No libraries to bundle — they
+binary and dropped straight into `/usr/bin`. No libraries to bundle - they
 have no external dynamic dependencies.
 
 ### Debian-packaged tools (`iotop`, `iftop`, `nethogs`, `tree`, `mtr`, `nmap`)
@@ -54,7 +54,7 @@ These are dynamically linked, so we make them self-contained at build time
    `/usr/sbin`).
 3. Each binary's shared-library closure (`ldd`) is copied into a **private**
    directory, `/usr/lib/cli-tools/lib`, **excluding the glibc core and the
-   dynamic loader** — those are resolved from the host.
+   dynamic loader** - those are resolved from the host.
 4. An `rpath` is set so the binary loads its bundled libraries:
    - on the binary: `$ORIGIN/../lib/cli-tools/lib`
    - on each bundled library: `$ORIGIN` (so transitive deps resolve regardless
@@ -75,7 +75,7 @@ untouched.
 We never bundle glibc or the dynamic loader (doing so risks an ABI split with
 the host loader). The bundled binaries therefore link against the host's glibc
 at runtime. A binary built against an older glibc runs fine on a newer one, but
-not the reverse — so we pin `debian.suite` to the oldest Debian base among
+not the reverse - so we pin `debian.suite` to the oldest Debian base among
 supported TrueNAS versions. This is also why a single release is
 kernel/version-independent and `install.sh` always fetches "latest".
 
