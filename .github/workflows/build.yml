@@ -1,5 +1,16 @@
 name: Build cli-tools Sysext
 
+# Builds cli-tools.raw and publishes it as a PRERELEASE, then opens one
+# hardware-test issue per TrueNAS train in tracked-versions.json
+# (`hardware-test` for a stable train, `preview-hardware-test` for a preview
+# one). Closing a train's issue as completed approves the release for that
+# train's boxes only (promote.yml adds a verified-train marker to its notes);
+# get.sh installs only releases approved for the box's train.
+# There is no publish-straight-to-Latest option: a full release with no
+# verified-train marker counts as approved for every train (that is how
+# releases from before per-train sign-off stay installable), so it would
+# reach every box untested.
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,14 +18,6 @@ on:
         description: 'Debian suite to build apt tools against (blank = tracked)'
         required: false
         default: ''
-      mark_latest:
-        description: 'true = publish straight to Latest; false (default) = prerelease + hardware-test gate'
-        required: false
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-        default: 'false'
 
   workflow_call:
     inputs:
@@ -22,10 +25,6 @@ on:
         type: string
         required: false
         default: ''
-      mark_latest:
-        type: string
-        required: false
-        default: 'false'
 
 permissions:
   contents: write
@@ -47,8 +46,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       suite: ${{ steps.params.outputs.suite }}
-      mark_latest: ${{ steps.params.outputs.mark_latest }}
-      prerelease: ${{ steps.params.outputs.prerelease }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -60,22 +57,11 @@ jobs:
         id: params
         env:
           INPUT_SUITE: ${{ inputs.suite }}
-          INPUT_MARK_LATEST: ${{ inputs.mark_latest }}
         run: |
           TRACKED_SUITE=$(jq -r '.debian.suite' .github/tracked-versions.json)
           SUITE="${INPUT_SUITE:-$TRACKED_SUITE}"
-          MARK_LATEST="${INPUT_MARK_LATEST:-true}"
-          # An unverified auto-build (mark_latest=false) is published as a
-          # PRERELEASE so GitHub excludes it from /releases/latest and
-          # releases/latest/download until a human promotes it. make_latest
-          # alone does not hold this gate with action-gh-release@v3.
-          if [ "$MARK_LATEST" = "true" ]; then PRERELEASE="false"; else PRERELEASE="true"; fi
-          {
-            echo "suite=${SUITE}"
-            echo "mark_latest=${MARK_LATEST}"
-            echo "prerelease=${PRERELEASE}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Resolved: suite=${SUITE} mark_latest=${MARK_LATEST} prerelease=${PRERELEASE}"
+          echo "suite=${SUITE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: suite=${SUITE}"
 
   build:
     needs: resolve
@@ -313,6 +299,9 @@ jobs:
           BUILD_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
         run: |
+          TAG="v${BUILD_DATE}-r${RUN_NUMBER}"
+          GET="https://raw.githubusercontent.com/${REPO}/main/get.sh"
+          TRAINS=$(jq -r '[.trains[].name] | join(", ")' .github/tracked-versions.json)
           {
             echo "## cli-tools sysext for TrueNAS SCALE"
             echo ""
@@ -331,19 +320,28 @@ jobs:
             sort "${SYSEXT_ROOT}/usr/lib/cli-tools/versions.txt"
             echo '```'
             echo ""
+            echo "This release starts as a pre-release. A hardware test on a TrueNAS train (${TRAINS})"
+            echo "approves it for that train's boxes only; until then the one-liner keeps installing the"
+            echo "newest release approved for each train."
+            echo ""
             echo "### Install"
+            echo "The newest release approved for your TrueNAS train:"
             echo '```bash'
-            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash"
+            echo "curl -fsSL ${GET} | sudo bash"
+            echo '```'
+            echo "This exact release:"
+            echo '```bash'
+            echo "curl -fsSL ${GET} | sudo bash -s -- --release=${TAG}"
             echo '```'
             echo ""
             echo "### Verify"
             echo '```bash'
-            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh | sudo bash -s -- --check"
+            echo "curl -fsSL ${GET} | sudo bash -s -- --check"
             echo '```'
             echo ""
             echo "### Uninstall"
             echo '```bash'
-            echo "curl -fsSL https://github.com/${REPO}/releases/latest/download/uninstall.sh | sudo bash"
+            echo "curl -fsSL ${GET} | sudo bash -s -- --uninstall"
             echo '```'
             echo ""
             echo "### Checksum"
@@ -365,10 +363,14 @@ jobs:
     needs: [resolve, build]
     runs-on: ubuntu-latest
     steps:
+      # scripts/ for the release assets, .github/ for tracked-versions.json
+      # (the trains the hardware-test issues are opened for).
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            .github
           sparse-checkout-cone-mode: true
 
       - name: Download build artifacts
@@ -395,21 +397,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish the draft (prerelease gate, or Latest on override)
+      # Publish the draft as a prerelease, always: it is approved per train
+      # only by that train's hardware-test issue (promote.yml).
+      - name: Publish the draft as a prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           REL_ID: ${{ steps.release.outputs.id }}
-          MARK_LATEST: ${{ needs.resolve.outputs.mark_latest }}
-        run: |
-          if [ "$MARK_LATEST" = "true" ]; then
-            gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -f make_latest=true
-          else
-            gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -F prerelease=true
-          fi
+        run: gh api --method PATCH "repos/${REPO}/releases/${REL_ID}" -F draft=false -F prerelease=true
 
-      - name: Create hardware-test issue for auto-build
-        if: needs.resolve.outputs.mark_latest == 'false'
+      - name: Open hardware-test issues, one per train (prerelease gate)
         uses: actions/github-script@v9
         env:
           BUILD_DATE: ${{ needs.build.outputs.build_date }}
@@ -417,99 +414,109 @@ jobs:
         with:
           script: |
             const tag = `v${process.env.BUILD_DATE}-r${process.env.RUN_NUMBER}`;
-            // Title: what to test | on what | which build. The tag goes last,
-            // verbatim: the duplicate check below matches on it.
-            const title = `Hardware test: cli-tools ${process.env.BUILD_DATE} | any TrueNAS 25.10+ system, no special hardware | ${tag}`;
-            const releaseUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${tag}`;
-
-            try {
-              await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: 'hardware-test',
-                color: 'FBCA04',
-                description: 'Auto-build awaiting verification on real hardware',
-              });
-            } catch (e) {
-              if (e.status !== 422) throw e;  // 422 = label already exists
+            const { owner, repo } = context.repo;
+            const releaseUrl = `https://github.com/${owner}/${repo}/releases/tag/${tag}`;
+            const fs = require('fs');
+            // One issue per supported TrueNAS train: a hardware test approves this
+            // release for its own train's boxes only (promote.yml). Stable trains use
+            // the hardware-test label, preview (beta) trains preview-hardware-test.
+            const { trains } = JSON.parse(fs.readFileSync('.github/tracked-versions.json', 'utf8'));
+            const labelOf = (t) => (t.channel === 'preview' ? 'preview-hardware-test' : 'hardware-test');
+            const labels = {
+              'hardware-test': { color: 'FBCA04',
+                description: 'Build awaiting verification on real hardware' },
+              'preview-hardware-test': { color: '5319E7',
+                description: 'Build awaiting verification on real hardware, on a TrueNAS preview (beta) train' },
+            };
+            for (const name of new Set(trains.map(labelOf))) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name, ...labels[name] });
+              } catch (e) { if (e.status !== 422) throw e; }
             }
-
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'hardware-test',
-              per_page: 100,
-            });
-            if (existing.data.some(i => i.title.includes(tag))) {
-              console.log(`Open hardware-test issue already exists for ${tag}, skipping`);
-              return;
+            // Duplicate check, keyed on tag AND train: an open issue whose markers
+            // (or title) name both already covers the pair. An open issue for this tag
+            // with no train marker and no train in its title is the single issue from
+            // before per-train sign-off: it covered every train (promote.yml still
+            // approves it for all of them), so it suppresses them all.
+            const open = [];
+            for (const name of Object.keys(labels)) {
+              open.push(...(await github.rest.issues.listForRepo({ owner, repo,
+                state: 'open', labels: name, per_page: 100 })).data);
             }
-
-            // Test instructions. Every command must work exactly as written on
-            // a TrueNAS box: a human validator pastes them. The scripts are
-            // downloaded to /var/tmp (survives the step 4 reboot, unlike /tmp)
-            // so `install.sh --check` can be re-run from there after reboot.
-            const base = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}`;
-            const dir = '/var/tmp/cli-tools-test';
-
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title,
-              labels: ['hardware-test'],
-              body: [
-                `An auto-build published a new release that needs verification before being promoted to **Latest**.`,
-                ``,
-                `**Release:** [${tag}](${releaseUrl})`,
-                `<!-- release-tag: ${tag} -->`,
-                ``,
-                `### Requirements`,
-                `- Any TrueNAS 25.10 or newer box with a data pool, including 26 betas. Userspace only (no kernel module), so one build serves every train and kernel.`,
-                `- No special hardware.`,
-                ``,
-                `### 1. Pre-checks`,
-                "```bash",
-                `cat /etc/version                       # 25.10 or newer`,
-                `sudo zpool list -H -o name             # at least one pool besides boot-pool`,
-                "```",
-                ``,
-                `### 2. Install this build`,
-                `It is a pre-release, so the default install (which fetches Latest) would not test it. Install it from its tag:`,
-                "```bash",
-                `BASE=${base}`,
-                `mkdir -p ${dir} && cd ${dir}`,
-                `for f in cli-tools.raw cli-tools.raw.sha256 install.sh cli-tools-lib.sh; do curl -fsSLO "$BASE/$f"; done`,
-                `sha256sum -c cli-tools.raw.sha256      # cli-tools.raw: OK`,
-                `sudo bash install.sh cli-tools.raw     # add --pool=NAME if it asks; lists "Tools now on PATH:"`,
-                "```",
-                ``,
-                `### 3. Verify`,
-                "```bash",
-                `cd ${dir}`,
-                `sudo bash install.sh --check           # "All bundled tools resolve on PATH", 0 fail (PREINIT only warns until step 4)`,
-                `cat /usr/lib/cli-tools/versions.txt    # matches "Included tools" in the release notes`,
-                `for t in btop ncdu yq tree mtr nmap; do "$t" --version </dev/null | head -1; done   # one version line each`,
-                `sudo sh -c 'for t in $(cat /usr/lib/cli-tools/manifest.txt); do ldd "$(command -v "$t")" 2>/dev/null | grep "not found"; done'   # prints nothing: every bundled lib resolves`,
-                "```",
-                ``,
-                `### 4. Reboot and re-verify`,
-                "```bash",
-                `sudo reboot`,
-                "```",
-                `After it is back up:`,
-                "```bash",
-                `cd ${dir}`,
-                `sudo bash install.sh --check           # "PREINIT completed successfully this boot", 0 fail`,
-                `btop --version                         # still on PATH`,
-                "```",
-                ``,
-                `### 5. Report and sign off`,
-                `Comment with \`cat /etc/version\`, the step 4 output of \`sudo bash install.sh --check\`, and any tool that failed to run.`,
-                `- Works: close this issue as **completed**. That promotes [\`${tag}\`](${releaseUrl}) to Latest (what the default install fetches) and appends the changelog.`,
-                `- Broken: comment what failed, then close as **not planned**. The release stays an unpromoted pre-release.`,
-                ``,
-                `Afterwards: \`rm -rf ${dir}\``,
-              ].join('\n'),
-            });
-            console.log(`Created hardware-test issue for ${tag}`);
+            const issueTag = (i) => ((i.body || '').match(/<!--\s*release-tag:\s*(\S+?)\s*-->/) || [])[1] || '';
+            const issueTrain = (i) => ((i.body || '').match(/<!--\s*train:\s*(\S+?)\s*-->/) || [])[1] || '';
+            const covers = (i, t) => {
+              if (issueTag(i) !== tag && !i.title.endsWith(` ${tag}`)) return false;
+              if (issueTrain(i)) return issueTrain(i) === t.key;
+              const named = trains.find((x) => i.title.includes(`| any ${x.name} system,`));
+              return named ? named.key === t.key : true;
+            };
+            // Test instructions. Every command must work exactly as written on a
+            // TrueNAS box: a human validator pastes them. The one-liner runs main's
+            // get.sh (what users run); --release makes it run this release's
+            // install.sh, which then downloads this release's cli-tools.raw.
+            const inst = `https://raw.githubusercontent.com/${owner}/${repo}/main/get.sh`;
+            for (const t of trains) {
+              const preview = t.channel === 'preview';
+              // Title: what to test | on what | which build. The train names the "on
+              // what"; the tag goes last, verbatim.
+              const title = `${preview ? 'Preview hardware test' : 'Hardware test'}: cli-tools ${process.env.BUILD_DATE} | any ${t.name} system, no special hardware | ${tag}`;
+              const dup = open.find((i) => covers(i, t));
+              if (dup) {
+                console.log(`Open issue #${dup.number} already covers ${tag} on ${t.name}, skipping`);
+                continue;
+              }
+              const others = trains.filter((x) => x.key !== t.key).map((x) => x.name);
+              await github.rest.issues.create({ owner, repo, title, labels: [labelOf(t)],
+                body: [
+                  `CI built and smoke-tested this release. This issue approves it for **${t.name}** boxes only: verify it **on real hardware, on a ${t.name} box**.${others.length ? ` ${others.join(', ')} ${others.length > 1 ? 'have their own issues' : 'has its own issue'} for this release.` : ''}`,
+                  ``,
+                  `**Release:** [${tag}](${releaseUrl})`,
+                  `**Train:** ${t.name} (\`cat /etc/version\` starts with \`${t.key}.\`)`,
+                  `<!-- release-tag: ${tag} -->`,
+                  `<!-- train: ${t.key} -->`,
+                  ``,
+                  `### Requirements`,
+                  `- A ${t.name} box with a data pool. Userspace only (no kernel module), so one build serves every train, but each train signs it off on its own.`,
+                  `- No special hardware.`,
+                  ``,
+                  `### 1. Pre-checks`,
+                  "```bash",
+                  `cat /etc/version                       # starts with ${t.key}. (this issue's train)`,
+                  `sudo zpool list -H -o name             # at least one pool besides boot-pool`,
+                  "```",
+                  ``,
+                  `### 2. Install this build`,
+                  `No hardware test has approved it for ${t.name} yet, so plain \`get.sh\` would install the newest approved release instead. Pin this build with \`--release\`:`,
+                  "```bash",
+                  `I=${inst}`,
+                  `curl -fsSL "$I" | sudo bash -s -- --release=${tag} --dry-run   # "Downloading cli-tools.raw from ${owner}/${repo} release ${tag}...", "Checksum OK", "=== Dry-run complete ==="`,
+                  `curl -fsSL "$I" | sudo bash -s -- --release=${tag}             # add --pool=NAME if it asks; lists "Tools now on PATH:"`,
+                  "```",
+                  ``,
+                  `### 3. Verify`,
+                  "```bash",
+                  `curl -fsSL "$I" | sudo bash -s -- --release=${tag} --check   # "All bundled tools resolve on PATH", 0 fail (PREINIT only warns until step 4)`,
+                  `cat /usr/lib/cli-tools/versions.txt    # matches "Included tools" in the release notes`,
+                  `for t in btop ncdu yq tree mtr nmap; do "$t" --version </dev/null | head -1; done   # one version line each`,
+                  `sudo sh -c 'for t in $(cat /usr/lib/cli-tools/manifest.txt); do ldd "$(command -v "$t")" 2>/dev/null | grep "not found"; done'   # prints nothing: every bundled lib resolves`,
+                  "```",
+                  ``,
+                  `### 4. Reboot and re-verify`,
+                  "```bash",
+                  `sudo reboot`,
+                  "```",
+                  `After it is back up:`,
+                  "```bash",
+                  `I=${inst}`,
+                  `curl -fsSL "$I" | sudo bash -s -- --release=${tag} --check   # "PREINIT completed successfully this boot", 0 fail`,
+                  `btop --version                         # still on PATH`,
+                  "```",
+                  ``,
+                  `### 5. Report and sign off`,
+                  `Comment with \`cat /etc/version\`, the step 4 output of \`--check\`, and any tool that failed to run. Sign off here only for a test on ${t.name}.`,
+                  `- Works: close this issue as **completed**. That approves [\`${tag}\`](${releaseUrl}) for ${t.name} boxes: promote.yml adds a \`verified-train: ${t.key}\` marker to its notes, and \`get.sh\` then installs it there. The first train to approve a release also makes it a full release and appends the changelog.`,
+                  `- Broken: comment what failed, then close as **not planned**. Nothing changes: ${t.name} boxes keep the newest release approved for them. To put that release back on this box: \`curl -fsSL ${inst} | sudo bash\`.`,
+                ].join('\n') });
+              console.log(`Created ${labelOf(t)} issue for ${tag} on ${t.name}`);
+            }

@@ -2,6 +2,18 @@
   "debian": {
     "suite": "bookworm"
   },
+  "trains": [
+    {
+      "key": "25.10",
+      "name": "TrueNAS 25.10",
+      "channel": "stable"
+    },
+    {
+      "key": "26",
+      "name": "TrueNAS 26 beta",
+      "channel": "preview"
+    }
+  ],
   "tools": {
     "btop": {
       "source": "github",

@@ -77,7 +77,9 @@ the host loader). The bundled binaries therefore link against the host's glibc
 at runtime. A binary built against an older glibc runs fine on a newer one, but
 not the reverse - so we pin `debian.suite` to the oldest Debian base among
 supported TrueNAS versions. This is also why a single release is
-kernel/version-independent and `install.sh` always fetches "latest".
+kernel/version-independent. Each release is still approved per TrueNAS train
+by a hardware test on that train, and `get.sh` installs the newest release
+approved for the box's train (see [build.md](build.md#per-train-approval)).
 
 ## Boot-time activation
 
@@ -89,5 +91,7 @@ every boot. See [install.md](install.md#persistence-model).
 
 See [build.md](build.md). In short: `resolve` reads the tracked suite →
 `build` assembles the tree in a Debian container and smoke-tests the squashfs →
-`release` publishes the GitHub release. A daily job bumps upstream tool
-versions and triggers an unverified build gated behind a hardware-test issue.
+`release` publishes a GitHub pre-release and opens one hardware-test issue per
+TrueNAS train. Closing a train's issue as completed approves the release for
+that train (`promote.yml`). A daily job bumps upstream tool versions and
+triggers such a build.

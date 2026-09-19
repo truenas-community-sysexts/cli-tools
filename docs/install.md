@@ -3,21 +3,56 @@
 ## Quick install
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/cli-tools/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash
 ```
 
-This downloads the latest `cli-tools.raw`, verifies its checksum, activates it
-via `systemd-sysext`, copies it to your data pool, and registers a PREINIT
-script so it survives reboots and TrueNAS updates.
+`get.sh` (served from `main`) reads the TrueNAS version (`midclt call
+system.info`), derives the **train** (the major version from 26 on, so every
+26.x including betas is train `26`; major.minor before that, e.g. `25.10`),
+and picks the newest release **approved** for that train:
+
+- its notes carry `<!-- verified-train: <train> -->`, written when that
+  train's hardware-test issue was closed as completed, or
+- it is a full (non-pre-release) release with no `verified-train` marker at
+  all. Every release from before per-train approval is one of these, so they
+  count for every train.
+
+A marker for another train only does not count, and nothing unapproved is
+installed: with no approved release for the train it stops and links the open
+hardware-test issues. It then downloads **that** release's `install.sh` and
+`cli-tools-lib.sh` and runs `install.sh` with your arguments plus
+`--release=<tag>`, which downloads that release's `cli-tools.raw`, verifies
+its checksum, activates it via `systemd-sysext`, copies it to your data pool,
+and registers a PREINIT script so it survives reboots and TrueNAS updates.
+
+A release from before per-train approval (`v2026.08.21-r11` and older) has an
+`install.sh` without `--release`. For those, `get.sh` downloads the release's
+`cli-tools.raw` itself, checks it against the release's `.sha256`, and hands
+it to that `install.sh` as a local image.
+
+Flags for the installer go after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash -s -- --pool=fast
+```
 
 ## Options
 
-`install.sh` accepts:
+`get.sh` accepts:
+
+| Option | Description |
+| --- | --- |
+| `--release=TAG` | Use this release instead of the newest approved one (no approval check) |
+| `--uninstall` | Run the release's `uninstall.sh` instead of `install.sh` |
+| `--repo=OWNER/NAME` | Use a fork's releases (also via `CLI_TOOLS_REPO`) |
+
+Everything else is passed to `install.sh`, which accepts:
 
 | Option | Description |
 | --- | --- |
 | `--pool=NAME` | ZFS pool to store the persistent copy on (`/mnt/NAME/.config/cli-tools`) |
 | `--persist-path=PATH` | Exact persistent path; must be `/mnt/<pool>/.config/cli-tools` |
+| `--release=TAG` | Install this release. Without it (and without a local image), `install.sh` picks the newest release approved for this box's train, the same way `get.sh` does |
 | `--repo=OWNER/NAME` | Download from a fork instead of the default repo (also via `CLI_TOOLS_REPO`) |
 | `--check` | Read-only probe of an existing install; prints a status report |
 | `--dry-run` | Validate downloads/checksums/pool resolution without changing anything |
@@ -31,6 +66,7 @@ sudo ./install.sh --pool=fast
 sudo ./install.sh --check
 sudo ./install.sh --dry-run
 sudo ./install.sh /tmp/cli-tools.raw
+sudo ./install.sh --release=v2026.08.21-r11
 ```
 
 ## Persistence model
@@ -62,8 +98,13 @@ installer knows where to put the persistent copy. The PREINIT script scans
 ## Uninstalling
 
 ```bash
-curl -fsSL https://github.com/truenas-community-sysexts/cli-tools/releases/latest/download/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/truenas-community-sysexts/cli-tools/main/get.sh | sudo bash -s -- --uninstall
 ```
+
+This runs the `uninstall.sh` of the newest release approved for this box's
+train, with that release's `restore.sh` and `cli-tools-lib.sh` beside it. A
+release's `uninstall.sh` piped to bash on its own fetches `restore.sh` and
+`cli-tools-lib.sh` from the newest approved release the same way.
 
 `uninstall.sh` is a thin alias for `restore.sh`. It unmerges the sysext,
 re-merges any other active sysexts, deregisters the PREINIT script, and removes
