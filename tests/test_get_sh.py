@@ -17,6 +17,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from urllib.parse import urlparse
 
 from release_fixtures import R11, release, tag
 
@@ -26,22 +27,42 @@ INSTALL_SH = ROOT / "scripts" / "install.sh"
 UNINSTALL_SH = ROOT / "scripts" / "uninstall.sh"
 REPO = "truenas-community-sysexts/cli-tools"
 
+
+def logged_host(line):
+    """Hostname of the URL in a stub-log line ("curl <url>"), or "" for other lines."""
+    parts = line.split()
+    if len(parts) > 1 and parts[0] == "curl":
+        return urlparse(parts[1]).hostname or ""
+    return ""
+
+
+def logged_path(line):
+    """Path of the URL in a stub-log line ("curl <url>"), or "" for other lines."""
+    parts = line.split()
+    if len(parts) > 1 and parts[0] == "curl":
+        return urlparse(parts[1]).path
+    return ""
+
+
 CURL_STUB = textwrap.dedent("""\
     #!/usr/bin/env python3
     import hashlib, json, os, re, sys
+    from urllib.parse import urlparse
     args = sys.argv[1:]
     url = next(a for a in args if a.startswith("https://"))
     with open(os.environ["STUB_LOG"], "a") as f:
         f.write("curl " + url + "\\n")
-    if "api.github.com" in url:
-        page = int(re.search(r"[?&]page=(\\d+)", url).group(1))
+    parsed = urlparse(url)
+    host, path = parsed.hostname, parsed.path
+    if host == "api.github.com":
+        page = int(re.search(r"(?:^|&)page=(\\d+)", parsed.query).group(1))
         pages = json.load(open(os.environ["STUB_PAGES"]))
         print(json.dumps(pages[page - 1] if page <= len(pages) else []))
         sys.exit(0)
-    if "/releases/download/" not in url:
+    if host != "github.com" or "/releases/download/" not in path:
         sys.exit(22)
-    repo = url.split("https://github.com/")[1].split("/releases/download/")[0]
-    tag, asset = url.split("/releases/download/")[1].split("/")
+    repo = path.split("/releases/download/")[0].strip("/")
+    tag, asset = path.split("/releases/download/")[1].split("/")
     if asset in os.environ.get("STUB_FAIL", "").split(","):
         sys.exit(22)
     image = f"cli-tools.raw of {repo} {tag}\\n"
@@ -162,7 +183,8 @@ class GetSh(GetShBase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.ran(p),
                          f"RAN install.sh from {tag(13)} with: --check --release={tag(13)}")
-        self.assertFalse(any(c.startswith("midclt") or "api.github.com" in c
+        self.assertFalse(any(c.startswith("midclt")
+                             or logged_host(c) == "api.github.com"
                              for c in self.calls()), self.calls())
 
     def test_pinned_uninstall(self):
@@ -173,8 +195,9 @@ class GetSh(GetShBase):
         p = self.get("--repo=someone/fork", version="26.0.0-BETA.3")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("REPO=someone/fork", p.stdout)
-        self.assertTrue(any("api.github.com/repos/someone/fork/releases" in c
-                            for c in self.calls()))
+        self.assertTrue(any(logged_host(c) == "api.github.com"
+                            and logged_path(c) == "/repos/someone/fork/releases"
+                            for c in self.calls()), self.calls())
         self.assertTrue(all("/someone/fork/releases/download/" in c
                             for c in self.calls() if "/releases/download/" in c))
         # --repo is get.sh's; the scripts get it through CLI_TOOLS_REPO.
@@ -325,7 +348,8 @@ class InstallerResolve(Stubbed):
         # The lib fetch and the image download share one resolution.
         p = self.resolve("25.10.7", calls=2)
         self.assertIn(f"tag={R11} ", p.stdout)
-        self.assertEqual(sum("api.github.com" in c for c in self.calls()), 1)
+        self.assertEqual(sum(logged_host(c) == "api.github.com"
+                             for c in self.calls()), 1)
 
 
 class UninstallStandalone(Stubbed):
