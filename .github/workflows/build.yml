@@ -444,6 +444,13 @@ jobs:
               return;
             }
 
+            // Test instructions. Every command must work exactly as written on
+            // a TrueNAS box: a human validator pastes them. The scripts are
+            // downloaded to /var/tmp (survives the step 4 reboot, unlike /tmp)
+            // so `install.sh --check` can be re-run from there after reboot.
+            const base = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}`;
+            const dir = '/var/tmp/cli-tools-test';
+
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -455,21 +462,52 @@ jobs:
                 `**Release:** [${tag}](${releaseUrl})`,
                 `<!-- release-tag: ${tag} -->`,
                 ``,
-                `### Install THIS build to test it`,
-                `It is a **pre-release**, so the default \`releases/latest\` install would fetch the current Latest, not this build. Install this exact build:`,
+                `### Requirements`,
+                `- Any TrueNAS 25.10 or newer box with a data pool, including 26 betas. Userspace only (no kernel module), so one build serves every train and kernel.`,
+                `- No special hardware.`,
+                ``,
+                `### 1. Pre-checks`,
                 "```bash",
-                `curl -fsSL https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/cli-tools.raw -o /tmp/cli-tools.raw`,
-                `curl -fsSL https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/install.sh | sudo bash -s -- /tmp/cli-tools.raw`,
+                `cat /etc/version                       # 25.10 or newer`,
+                `sudo zpool list -H -o name             # at least one pool besides boot-pool`,
                 "```",
                 ``,
-                `### Test checklist`,
-                `- [ ] Install on a TrueNAS SCALE system`,
-                `- [ ] \`sudo ./install.sh --check\` reports all OK`,
-                `- [ ] Spot-check a few tools actually run (e.g. \`btop --version\`, \`nmap --version\`, \`mtr --help\`)`,
-                `- [ ] Reboot and confirm the PREINIT script re-merges the sysext`,
+                `### 2. Install this build`,
+                `It is a pre-release, so the default install (which fetches Latest) would not test it. Install it from its tag:`,
+                "```bash",
+                `BASE=${base}`,
+                `mkdir -p ${dir} && cd ${dir}`,
+                `for f in cli-tools.raw cli-tools.raw.sha256 install.sh cli-tools-lib.sh; do curl -fsSLO "$BASE/$f"; done`,
+                `sha256sum -c cli-tools.raw.sha256      # cli-tools.raw: OK`,
+                `sudo bash install.sh cli-tools.raw     # add --pool=NAME if it asks; lists "Tools now on PATH:"`,
+                "```",
                 ``,
-                `### Promote`,
-                `This build is published as a **pre-release**, so it is not served by \`releases/latest\` yet. Once you've verified it, **close this issue as completed** — that automatically promotes [\`${tag}\`](${releaseUrl}) to the latest release and appends the changelog. No manual editing needed.`,
+                `### 3. Verify`,
+                "```bash",
+                `cd ${dir}`,
+                `sudo bash install.sh --check           # "All bundled tools resolve on PATH", 0 fail (PREINIT only warns until step 4)`,
+                `cat /usr/lib/cli-tools/versions.txt    # matches "Included tools" in the release notes`,
+                `for t in btop ncdu yq tree mtr nmap; do "$t" --version </dev/null | head -1; done   # one version line each`,
+                `sudo sh -c 'for t in $(cat /usr/lib/cli-tools/manifest.txt); do ldd "$(command -v "$t")" 2>/dev/null | grep "not found"; done'   # prints nothing: every bundled lib resolves`,
+                "```",
+                ``,
+                `### 4. Reboot and re-verify`,
+                "```bash",
+                `sudo reboot`,
+                "```",
+                `After it is back up:`,
+                "```bash",
+                `cd ${dir}`,
+                `sudo bash install.sh --check           # "PREINIT completed successfully this boot", 0 fail`,
+                `btop --version                         # still on PATH`,
+                "```",
+                ``,
+                `### 5. Report and sign off`,
+                `Comment with \`cat /etc/version\`, the step 4 output of \`sudo bash install.sh --check\`, and any tool that failed to run.`,
+                `- Works: close this issue as **completed**. That promotes [\`${tag}\`](${releaseUrl}) to Latest (what the default install fetches) and appends the changelog.`,
+                `- Broken: comment what failed, then close as **not planned**. The release stays an unpromoted pre-release.`,
+                ``,
+                `Afterwards: \`rm -rf ${dir}\``,
               ].join('\n'),
             });
             console.log(`Created hardware-test issue for ${tag}`);
