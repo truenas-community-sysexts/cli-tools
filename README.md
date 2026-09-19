@@ -1,6 +1,6 @@
 # CLI Tools Sysext for TrueNAS
 
-A [systemd-sysext](https://www.freedesktop.org/software/systemd/man/systemd-sysext.html) package that adds a curated set of common command-line utilities to TrueNAS — the tools you reach for over SSH that aren't in the stock image — without modifying the immutable root filesystem.
+A [systemd-sysext](https://www.freedesktop.org/software/systemd/man/systemd-sysext.html) package that adds a curated set of common command-line utilities to TrueNAS - the tools you reach for over SSH that aren't in the stock image - without modifying the immutable root filesystem.
 
 Everything is merged into `/usr` at boot and survives reboots and TrueNAS updates. Because these are plain userspace binaries (not kernel modules), **one release works on every TrueNAS version**.
 

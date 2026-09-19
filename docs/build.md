@@ -8,9 +8,9 @@ Docker if you want.
 
 `.github/workflows/build.yml` has three jobs:
 
-1. **resolve** — reads `debian.suite` and the `mark_latest` input from
+1. **resolve**: reads `debian.suite` and the `mark_latest` input from
    `.github/tracked-versions.json` / workflow inputs.
-2. **build** — runs in a `debian:<suite>-slim` container and:
+2. **build**: runs in a `debian:<suite>-slim` container and:
    - fetches the prebuilt static tools (`source: github` / `source: url`),
    - `apt-get install`s the Debian tools (`source: apt`) and bundles each one
      self-contained via `.github/scripts/bundle-apt-tool.sh`,
@@ -20,7 +20,7 @@ Docker if you want.
    - smoke-tests the image (extension-release valid, preinit present, every
      manifest command is an executable, best-effort `--version`),
    - uploads the artifact.
-3. **release** — publishes a GitHub release with `cli-tools.raw`, its
+3. **release**: publishes a GitHub release with `cli-tools.raw`, its
    `.sha256`, and the install scripts. `make_latest` is controlled by the
    `mark_latest` input.
 
@@ -83,7 +83,7 @@ queries the latest upstream release; if newer than tracked, it bumps
 latest, and opens a `hardware-test` issue. After verifying on real hardware,
 promote the release to *Latest* and close the issue.
 
-- `apt` tools are **not** polled — they float with the pinned Debian suite and
+- `apt` tools are **not** polled - they float with the pinned Debian suite and
   refresh on every rebuild.
 - `url` tools (no release API) are bumped manually.
 
