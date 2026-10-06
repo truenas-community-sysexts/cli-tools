@@ -54,8 +54,8 @@ from 26 on, major.minor before that), `name` goes into issue titles, and
 - **promote.yml**: closing a train's issue as completed appends
   `<!-- verified-train: <key> -->` to the release notes. On the release's
   first approval the same update also turns the pre-release into a full
-  release and appends the changelog. GitHub's "Latest" follows the newest
-  release approved for a stable train, but nothing selects by it.
+  release and appends the changelog. GitHub's "Latest" is the newest
+  release signed off on any train (by run number), but nothing selects by it.
 - **get.sh** (and `install.sh`/`uninstall.sh` run on their own) install the
   newest release whose notes carry the box's train, or a full release with no
   marker at all (from before per-train approval, so approved for every train).
