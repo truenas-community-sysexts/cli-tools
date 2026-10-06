@@ -38,7 +38,7 @@ only. `tracked-versions.json` lists the supported trains:
 ```jsonc
 "trains": [
   { "key": "25.10", "name": "TrueNAS 25.10", "channel": "stable" },
-  { "key": "26", "name": "TrueNAS 26 beta", "channel": "preview" }
+  { "key": "27", "name": "TrueNAS 27 RC", "channel": "preview" }
 ]
 ```
 
@@ -64,8 +64,9 @@ Why there is no publish-straight-to-Latest option: a full release without
 markers counts as approved for every train, so it would reach every box
 untested.
 
-When TrueNAS 26.0 ships, add `26` as a stable train and move the preview entry
-on to the next beta.
+TrueNAS 26 was renamed 27 at its first RC, so the preview train is `27`; the
+old `26` beta train gets no new issues. When TrueNAS 27.0 ships, make `27` a
+stable train and move the preview entry on to the next beta.
 
 ## The source of truth: `tracked-versions.json`
 
