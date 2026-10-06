@@ -9,8 +9,8 @@
       "channel": "stable"
     },
     {
-      "key": "26",
-      "name": "TrueNAS 26 beta",
+      "key": "27",
+      "name": "TrueNAS 27 RC",
       "channel": "preview"
     }
   ],

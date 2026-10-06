@@ -91,12 +91,12 @@ class PerTrain(unittest.TestCase):
             self.by_train["25.10"]["title"],
             f"Hardware test: cli-tools 2026.09.20 | any TrueNAS 25.10 system, no special hardware | {TAG}")
         self.assertEqual(
-            self.by_train["26"]["title"],
-            f"Preview hardware test: cli-tools 2026.09.20 | any TrueNAS 26 beta system, no special hardware | {TAG}")
+            self.by_train["27"]["title"],
+            f"Preview hardware test: cli-tools 2026.09.20 | any TrueNAS 27 RC system, no special hardware | {TAG}")
 
     def test_labels_follow_the_channel(self):
         self.assertEqual(self.by_train["25.10"]["labels"], ["hardware-test"])
-        self.assertEqual(self.by_train["26"]["labels"], ["preview-hardware-test"])
+        self.assertEqual(self.by_train["27"]["labels"], ["preview-hardware-test"])
         self.assertEqual(sorted(l["name"] for l in self.out["labels"]),
                          ["hardware-test", "preview-hardware-test"])
 
@@ -114,12 +114,12 @@ class PerTrain(unittest.TestCase):
             self.assertEqual(re.search(r"<!--\s*train:\s*(\S+?)\s*-->", body).group(1), key)
 
     def test_body_tells_the_tester_which_train(self):
-        body = self.by_train["26"]["body"]
-        self.assertIn("approves it for **TrueNAS 26 beta** boxes only", body)
-        self.assertIn("on a TrueNAS 26 beta box", body)
+        body = self.by_train["27"]["body"]
+        self.assertIn("approves it for **TrueNAS 27 RC** boxes only", body)
+        self.assertIn("on a TrueNAS 27 RC box", body)
         self.assertIn("TrueNAS 25.10 has its own issue for this release", body)
-        self.assertIn("cat /etc/version                       # starts with 26.", body)
-        self.assertIn("`verified-train: 26`", body)
+        self.assertIn("cat /etc/version                       # starts with 27.", body)
+        self.assertIn("`verified-train: 27`", body)
 
     def test_install_commands_pin_this_release_via_get_sh(self):
         for iss in self.out["issues"]:
@@ -160,10 +160,10 @@ class DuplicateCheck(unittest.TestCase):
 
     def test_open_issue_for_tag_and_train_by_markers(self):
         body = f"<!-- release-tag: {TAG} -->\n<!-- train: 25.10 -->\n"
-        self.assertEqual(self.trains_created(open_issue("renamed", body)), ["26"])
+        self.assertEqual(self.trains_created(open_issue("renamed", body)), ["27"])
 
     def test_open_issue_for_tag_and_train_by_title(self):
-        title = ("Preview hardware test: cli-tools 2026.09.20 | any TrueNAS 26 beta system, "
+        title = ("Preview hardware test: cli-tools 2026.09.20 | any TrueNAS 27 RC system, "
                  f"no special hardware | {TAG}")
         self.assertEqual(self.trains_created(
             open_issue(title, labels=("preview-hardware-test",))), ["25.10"])
@@ -183,7 +183,7 @@ class DuplicateCheck(unittest.TestCase):
             open_issue("x", f"<!-- release-tag: {TAG} -->\n<!-- train: 24.04 -->\n"),
             open_issue("Hardware test: cli-tools v2026.09.20-r1", number=8),
             open_issue("y", f"<!-- release-tag: {R11} -->\n<!-- train: 25.10 -->\n", number=9)),
-            ["25.10", "26"])
+            ["25.10", "27"])
 
 
 class ReleaseNotes(unittest.TestCase):
@@ -212,7 +212,7 @@ class ReleaseNotes(unittest.TestCase):
         self.assertIn(f"curl -fsSL {GET} | sudo bash -s -- --release={TAG}\n", notes)
         self.assertIn(f"curl -fsSL {GET} | sudo bash -s -- --check\n", notes)
         self.assertIn(f"curl -fsSL {GET} | sudo bash -s -- --uninstall\n", notes)
-        self.assertIn("A hardware test on a TrueNAS train (TrueNAS 25.10, TrueNAS 26 beta)", notes)
+        self.assertIn("A hardware test on a TrueNAS train (TrueNAS 25.10, TrueNAS 27 RC)", notes)
         self.assertNotIn("releases/latest", notes)
 
     def test_notes_carry_no_approval(self):

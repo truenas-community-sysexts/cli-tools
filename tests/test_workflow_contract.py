@@ -12,7 +12,7 @@ from test_hardware_test_issue import TAG, render
 from test_promote import apply, close
 from test_release_selection import run_selection
 
-VERSIONS = {"25.10": "25.10.7", "26": "26.0.0-BETA.3"}
+VERSIONS = {"25.10": "25.10.7", "27": "27.0.0-RC.1"}
 
 
 def selected(releases, train):
@@ -25,7 +25,7 @@ class SignOffChain(unittest.TestCase):
         issues = render(run="12", date="2026.09.20")["issues"]
         self.issues = {}
         for iss in issues:
-            key = "26" if "26 beta" in iss["title"] else "25.10"
+            key = "27" if "TrueNAS 27 RC" in iss["title"] else "25.10"
             self.issues[key] = dict(iss, number=len(self.issues) + 1,
                                     labels=[{"name": n} for n in iss["labels"]])
         self.releases = [release(TAG, prerelease=True), release(R11)]
@@ -37,15 +37,15 @@ class SignOffChain(unittest.TestCase):
 
     def test_before_any_sign_off_both_trains_keep_the_grandfathered_release(self):
         self.assertEqual(selected(self.releases, "25.10"), R11)
-        self.assertEqual(selected(self.releases, "26"), R11)
+        self.assertEqual(selected(self.releases, "27"), R11)
 
     def test_a_sign_off_approves_its_own_train_only(self):
-        self.sign_off("26")
-        self.assertEqual(selected(self.releases, "26"), TAG)
+        self.sign_off("27")
+        self.assertEqual(selected(self.releases, "27"), TAG)
         self.assertEqual(selected(self.releases, "25.10"), R11)
         self.sign_off("25.10")
         self.assertEqual(selected(self.releases, "25.10"), TAG)
-        self.assertEqual(selected(self.releases, "26"), TAG)
+        self.assertEqual(selected(self.releases, "27"), TAG)
 
     def test_fixture_marker_matches_what_promote_writes(self):
         self.sign_off("25.10")
